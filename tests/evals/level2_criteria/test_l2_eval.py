@@ -19,7 +19,7 @@ from app.policy.registry import PolicyRegistry, iter_leaves, reset_registry
 from tests.evals.level2_criteria.cases import L2_CASES, make_case_facts
 
 
-pytestmark = pytest.mark.skipif(
+_RUN_LLM = pytest.mark.skipif(
     os.environ.get("RUN_LLM_EVALS") != "1",
     reason="Set RUN_LLM_EVALS=1 to run LLM-dependent evals (each case ~$0.01-0.05).",
 )
@@ -33,20 +33,23 @@ def registry():
     return r
 
 
-def _find_criterion(registry, criterion_id):
-    policy = registry.get("molina-mcp-032")
+def _find_criterion(registry, policy_id, criterion_id):
+    policy = registry.get(policy_id)
+    if policy is None:
+        raise ValueError(f"policy {policy_id!r} not loaded in registry")
     for leaf in iter_leaves(policy.criteria):
         if leaf.id == criterion_id:
             return leaf
     for ex in policy.exclusions:
         if ex.id == criterion_id:
             return ex
-    raise ValueError(f"criterion {criterion_id} not found in policy")
+    raise ValueError(f"criterion {criterion_id!r} not found in policy {policy_id!r}")
 
 
+@_RUN_LLM
 @pytest.mark.parametrize("case", L2_CASES, ids=lambda c: c.id)
 async def test_level2_case(case, registry):
-    criterion = _find_criterion(registry, case.criterion_id)
+    criterion = _find_criterion(registry, case.policy_id, case.criterion_id)
     case_facts = make_case_facts(case.facts)
     result = await adjudicate_criterion(criterion, case_facts)
     actual = result.verdict.verdict

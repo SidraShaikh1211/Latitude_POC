@@ -21,6 +21,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Body, HTTPException, Query
 
+from app import events
 from app.api.cases import _persist, _update_case_stage
 from app.db.engine import session_scope
 from app.models import Case
@@ -109,18 +110,37 @@ async def claim_submit(
     }
 
 
+# Wall-clock ceiling on the payer-side pipeline. With per-request Anthropic
+# timeouts of 60s, max_retries=3, and an 8-iteration agent loop per leaf, the
+# real-world cost-tuned target is ~3-4 min. 10 min is the hard ceiling — a
+# pipeline taking longer is wedged and should fail loudly instead of holding
+# the row in `processing` until the next server restart.
+PIPELINE_DEADLINE_SECONDS = 600.0
+
+
 async def _run_pipeline_async(case_id: str, bundle: dict) -> None:
-    """Background task: run the orchestrator and persist the final case."""
+    """Background task: run the orchestrator, persisting partial results
+    after each step so a polling UI sees data appear progressively, then
+    write the final case snapshot."""
     async def stage_cb(stage: str) -> None:
         await _update_case_stage(case_id, stage)
 
+    async def partial_cb(fields: dict[str, Any]) -> None:
+        await _apply_partial(case_id, fields)
+
     try:
-        run = await evaluate_pa_case(
-            bundle,
-            run_intake_on_documents=True,
-            case_id=case_id,
-            progress_callback=stage_cb,
+        run = await asyncio.wait_for(
+            evaluate_pa_case(
+                bundle,
+                run_intake_on_documents=True,
+                case_id=case_id,
+                progress_callback=stage_cb,
+                on_partial=partial_cb,
+            ),
+            timeout=PIPELINE_DEADLINE_SECONDS,
         )
+        # Final snapshot: idempotently writes the same fields plus the
+        # terminal status (approved/denied/pended/needs_review).
         await _persist(run)
         await _update_case_stage(case_id, "complete")
         log.info(
@@ -128,9 +148,46 @@ async def _run_pipeline_async(case_id: str, bundle: dict) -> None:
             case_id=case_id,
             outcome=run.determination.outcome if run.determination else None,
         )
+    except asyncio.TimeoutError:
+        log.error("pas.pipeline_timeout", case_id=case_id, deadline=PIPELINE_DEADLINE_SECONDS)
+        await _update_case_stage(
+            case_id,
+            "failed",
+            error=(
+                f"Pipeline exceeded the {PIPELINE_DEADLINE_SECONDS:.0f}s deadline. "
+                "The LLM call chain stalled. Resubmit the case to retry."
+            ),
+        )
     except Exception as e:
         log.exception("pas.pipeline_failed", case_id=case_id, error=str(e))
         await _update_case_stage(case_id, "failed", error=str(e)[:1500])
+
+
+async def _apply_partial(case_id: str, fields: dict[str, Any]) -> None:
+    """Patch a Case row with a partial set of column values.
+
+    Fields are the kwargs of `Case(...)` minus `id`. Unknown keys are
+    silently dropped (defensive — caller is trusted but mismatches are
+    cheap to tolerate).
+    """
+    if not fields:
+        return
+    async with session_scope() as session:
+        case = await session.get(Case, case_id)
+        if case is None:
+            log.warning("pas.partial_missing_case", case_id=case_id)
+            return
+        for k, v in fields.items():
+            if hasattr(case, k):
+                setattr(case, k, v)
+
+    # Forward to SSE subscribers. We only forward field NAMES + scalar values
+    # here; large blobs like extracted_facts can be fetched via GET when the
+    # client wants the full payload.
+    await events.publish(
+        f"case:{case_id}",
+        {"type": "partial", "fields": list(fields.keys())},
+    )
 
 
 @router.get("/fhir/ClaimResponse/{case_id}")

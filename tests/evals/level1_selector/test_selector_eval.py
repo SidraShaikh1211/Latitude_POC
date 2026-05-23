@@ -267,11 +267,9 @@ def test_S14_initial_branch_when_no_prior(registry_with_molina):
     assert res.branch == "initial"
 
 
-def test_S15_wrong_payer(registry_with_molina):
-    """S15: payer=aetna → no_match"""
-    res = select_policy(_ctx(payer="aetna"), registry=registry_with_molina)
-    assert res.status == "no_match"
-    assert any("payer mismatch" in reason for _, reason in res.eliminated)
+# S15 (wrong_payer) was dropped: the selector no longer filters on payer name.
+# In the current single-tenant demo every loaded policy belongs to "the payer,"
+# so payer mismatch is not a valid elimination reason.
 
 
 # ---------------------------------------------------------------------------

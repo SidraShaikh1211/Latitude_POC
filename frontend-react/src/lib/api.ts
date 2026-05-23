@@ -58,3 +58,15 @@ export async function getSubmission(submissionId: string): Promise<Submission> {
 export async function listSubmissions(): Promise<Submission[]> {
   return json(await fetch(`${API_BASE}/v1/doctor/submissions`));
 }
+
+// ---------------------------------------------------------------------------
+// SSE URLs (consumed via EventSource in the React layer)
+// ---------------------------------------------------------------------------
+
+export function submissionEventsUrl(submissionId: string): string {
+  return `${API_BASE}/v1/doctor/submissions/${submissionId}/events`;
+}
+
+export function caseEventsUrl(caseId: string): string {
+  return `${API_BASE}/v1/cases/${caseId}/events`;
+}

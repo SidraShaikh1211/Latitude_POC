@@ -10,6 +10,7 @@ from app.api import doctor as doctor_router
 from app.api import fhir_pas as fhir_pas_router
 from app.api import policies as policies_router
 from app.db.engine import init_db
+from app.db.orphan_sweep import sweep_orphans
 from app.logging_config import configure_logging, log
 from app.mcp_server.server import server as mcp_server
 from app.policy.registry import get_registry
@@ -27,6 +28,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Eager-load policy registry so citation-verification failures surface at startup
     reg = get_registry()
+    # Mark any in-flight cases/submissions left over from a previous worker as
+    # failed. The background asyncio.create_task that drives the pipeline does
+    # not survive a uvicorn --reload restart, so without this sweep the UI
+    # would poll a never-completing row forever.
+    sweep_result = await sweep_orphans()
     async with _mcp_sessions.run():
         log.info(
             "startup",
@@ -36,6 +42,7 @@ async def lifespan(app: FastAPI):
             database_url=settings.database_url,
             policies_loaded=[p.policy_id for p in reg.all_policies()],
             mcp_mount="/mcp",
+            orphan_sweep=sweep_result,
         )
         yield
     log.info("shutdown")

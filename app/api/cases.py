@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app import events
 from app.db.engine import session_scope
 from app.models import Case
 from app.orchestrator import CaseRun, evaluate_pa_case
@@ -69,6 +72,17 @@ async def _update_case_stage(
             pass
         elif stage == "failed":
             case.status = "failed"
+
+    # Fan out to any SSE subscriber listening on this case
+    await events.publish(
+        f"case:{case_id}",
+        {
+            "type": "stage",
+            "stage": stage,
+            "error": error,
+            "terminal": stage in ("complete", "failed"),
+        },
+    )
 
 
 async def _persist(run: CaseRun) -> None:
@@ -191,6 +205,80 @@ async def get_case(case_id: str) -> dict[str, Any]:
             "created_at": case.created_at.isoformat() if case.created_at else None,
             "updated_at": case.updated_at.isoformat() if case.updated_at else None,
         }
+
+
+@router.get("/cases/{case_id}/events")
+async def case_events(case_id: str, request: Request) -> StreamingResponse:
+    """SSE stream of case lifecycle events.
+
+    The first event is always a `snapshot` carrying the current case state,
+    so a late-subscribing client sees the case in whatever stage it's in
+    (including already-complete) without having to also GET /cases/{id}.
+
+    Subsequent events:
+      - `stage`   — { stage: "<intake|selecting|adjudicating|reviewing|building_response|complete|failed>", terminal: bool }
+      - `partial` — { fields: [<column names that were just written>] }
+
+    The stream closes after a terminal `stage` event.
+    """
+
+    async def event_source():
+        # Validate up-front so we don't open a stream against a missing case
+        async with session_scope() as session:
+            case = await session.get(Case, case_id)
+        if case is None:
+            yield _sse_event("error", {"detail": "Case not found"})
+            return
+
+        # Initial snapshot — same payload shape as GET /cases/{id}
+        snapshot = await get_case(case_id)
+        yield _sse_event("snapshot", snapshot)
+        if snapshot["processing_stage"] in ("complete", "failed"):
+            return
+
+        # Live subscription. Stream until we get a terminal stage or the
+        # client disconnects (request.is_disconnected() goes true).
+        queue = events.subscribe(f"case:{case_id}")
+        try:
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    # Keep-alive comment so proxies don't close the pipe
+                    yield ": keepalive\n\n"
+                    continue
+                # When a `partial` event lands, re-fetch the snapshot so the
+                # client always gets resolved data rather than just field names.
+                if ev.get("type") == "partial":
+                    fresh = await get_case(case_id)
+                    yield _sse_event("partial", {
+                        "fields": ev.get("fields", []),
+                        "snapshot": fresh,
+                    })
+                else:
+                    yield _sse_event(ev.get("type", "message"), ev)
+                if ev.get("terminal"):
+                    # Send a final snapshot so the client has the determination
+                    fresh = await get_case(case_id)
+                    yield _sse_event("complete", fresh)
+                    return
+        finally:
+            events.unsubscribe(f"case:{case_id}", queue)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+    }
+    return StreamingResponse(event_source(), media_type="text/event-stream", headers=headers)
+
+
+def _sse_event(event_name: str, data: Any) -> str:
+    """Format a single SSE frame. `data` is JSON-serialized."""
+    payload = json.dumps(data, default=str)
+    return f"event: {event_name}\ndata: {payload}\n\n"
 
 
 @router.get("/cases/{case_id}/determination")

@@ -27,15 +27,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import tempfile
 import uuid
 from typing import Any
 
 import httpx
 import structlog
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
+from app import events
 from app.db.engine import session_scope
 from app.extraction.metadata import (
     MetadataResult,
@@ -111,6 +114,63 @@ async def get_submission(submission_id: str) -> dict[str, Any]:
         return _submission_to_dict(sub)
 
 
+@router.get("/submissions/{submission_id}/events")
+async def submission_events(submission_id: str, request: Request) -> StreamingResponse:
+    """SSE stream of submission lifecycle events.
+
+    First event is a `snapshot` with the current submission state. Then each
+    subsequent state change (extracting_metadata → bundle_ready → sending
+    → sent/failed) emits an `update` event carrying the fresh snapshot. The
+    stream closes after `sent` or `failed`.
+    """
+
+    async def event_source():
+        async with session_scope() as session:
+            sub = await session.get(Submission, submission_id)
+        if sub is None:
+            yield _sse_event("error", {"detail": "Submission not found"})
+            return
+
+        snapshot = _submission_to_dict(sub)
+        yield _sse_event("snapshot", snapshot)
+        if snapshot["state"] in ("sent", "failed"):
+            return
+
+        queue = events.subscribe(f"submission:{submission_id}")
+        try:
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                async with session_scope() as session:
+                    sub = await session.get(Submission, submission_id)
+                fresh = _submission_to_dict(sub) if sub else None
+                yield _sse_event("update", {
+                    "fields": ev.get("fields", []),
+                    "snapshot": fresh,
+                })
+                if ev.get("terminal"):
+                    return
+        finally:
+            events.unsubscribe(f"submission:{submission_id}", queue)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_source(), media_type="text/event-stream", headers=headers)
+
+
+def _sse_event(event_name: str, data: Any) -> str:
+    payload = json.dumps(data, default=str)
+    return f"event: {event_name}\ndata: {payload}\n\n"
+
+
 # ---------------------------------------------------------------------------
 # Background pipeline
 # ---------------------------------------------------------------------------
@@ -122,10 +182,48 @@ async def _run_doctor_pipeline_async(
     """The doctor side: PDF → metadata → bundle → POST to payer.
 
     Writes Submission state at every boundary so the UI's polling reflects
-    progress live.
+    progress live. Wrapped in `asyncio.wait_for` so a stalled Claude call
+    can't hold the Submission row in a non-terminal state indefinitely.
     """
     try:
-        # 1. Read PDF (deterministic, no LLM)
+        await asyncio.wait_for(
+            _run_doctor_pipeline_inner(submission_id, pdf_bytes, pdf_filename),
+            timeout=DOCTOR_PIPELINE_DEADLINE_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        log.error(
+            "doctor.pipeline_timeout",
+            submission_id=submission_id,
+            deadline=DOCTOR_PIPELINE_DEADLINE_SECONDS,
+        )
+        await _update_submission(
+            submission_id,
+            state="failed",
+            error=(
+                f"Submission pipeline exceeded the "
+                f"{DOCTOR_PIPELINE_DEADLINE_SECONDS:.0f}s deadline (likely a stalled "
+                "metadata extraction). Resubmit the PDF to retry."
+            ),
+        )
+    except Exception as e:
+        log.exception("doctor.pipeline_failed", submission_id=submission_id)
+        await _update_submission(submission_id, state="failed", error=str(e)[:1500])
+
+
+# Doctor-side ceiling: PDF read + one Claude structured-output + bundle
+# assemble + one HTTP handoff. 3 min is generous; production would be ~30s.
+DOCTOR_PIPELINE_DEADLINE_SECONDS = 180.0
+
+
+async def _run_doctor_pipeline_inner(
+    submission_id: str, pdf_bytes: bytes, pdf_filename: str,
+) -> None:
+    """Doctor pipeline body. Exceptions propagate to the wrapper, which
+    converts them into a `failed` Submission row."""
+    tmp_path: str | None = None
+    try:
+        # 1. Read PDF (deterministic, no LLM). Stage the bytes through a
+        # temp file because pymupdf.open() wants a path.
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(pdf_bytes)
             tmp_path = f.name
@@ -185,10 +283,15 @@ async def _run_doctor_pipeline_async(
             submission_id=submission_id,
             payer_case_id=payer_case_id,
         )
-
-    except Exception as e:
-        log.exception("doctor.pipeline_failed", submission_id=submission_id)
-        await _update_submission(submission_id, state="failed", error=str(e)[:1500])
+    finally:
+        # PyMuPDF has finished with the file by the time we exit the function
+        # body (extract_pdf opens with `with pymupdf.open(...)`), so it's
+        # safe to unlink even on the happy path.
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 async def _post_to_payer(bundle: dict) -> str:
@@ -224,6 +327,20 @@ async def _update_submission(submission_id: str, **fields: Any) -> None:
             sub.error_message = (fields.pop("error") or "")[:2048] or None
         for k, v in fields.items():
             setattr(sub, k, v)
+        new_state = sub.state
+        payer_case_id = sub.payer_case_id
+
+    # Fan out to any SSE subscriber listening on this submission
+    await events.publish(
+        f"submission:{submission_id}",
+        {
+            "type": "update",
+            "state": new_state,
+            "payer_case_id": payer_case_id,
+            "fields": list(fields.keys()),
+            "terminal": new_state in ("sent", "failed"),
+        },
+    )
 
 
 def _submission_to_dict(s: Submission) -> dict[str, Any]:

@@ -293,14 +293,21 @@ def _extract_urgency(claim: dict, service_date: date) -> str:
 def _extract_setting_and_category(
     claim: dict, srs: list[dict]
 ) -> tuple[str, str]:
-    # ServiceRequest.category gives us the request category; default to procedural
+    # ServiceRequest.category gives us the request category; default to procedural.
+    # Prefer category.text (set by our bundle constructor to one of
+    # surgical / procedural / pharmacy) over the SNOMED code, which is a
+    # categorical label that doesn't map 1:1 to our category vocabulary.
+    allowed = {"pharmacy", "dme", "service", "procedural", "surgical"}
     category = "procedural"
     setting = "outpatient"
     for sr in srs:
         for cat in sr.get("category") or []:
+            text = (cat.get("text") or "").strip().lower()
+            if text in allowed:
+                category = text
             for c in cat.get("coding") or []:
                 code = (c.get("code") or "").lower()
-                if code in {"pharmacy", "dme", "service", "procedural"}:
+                if code in allowed:
                     category = code
         loc = sr.get("locationCode") or []
         for l in loc:

@@ -130,8 +130,9 @@ def select_policy(
 
 def _why_eliminated(p: Policy, ctx: CaseContext) -> str | None:
     """Return a one-line reason a policy is eliminated, or None if it passes."""
-    if p.payer_id != ctx.payer_id:
-        return f"payer mismatch: policy.payer={p.payer_id} ctx.payer={ctx.payer_id}"
+    # Payer-name match intentionally not enforced: in the current single-tenant
+    # demo every loaded policy belongs to "the payer," so requests are matched
+    # on the clinical filters (CPT/ICD-10/state/age/effective date) only.
 
     # Effective date window
     try:

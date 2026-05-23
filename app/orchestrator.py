@@ -20,6 +20,10 @@ import structlog
 
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+# Partial-result callback: fires after each pipeline step with the fields
+# now known. Lets the caller persist results incrementally so a UI polling
+# the case row sees data appear progressively instead of all at the end.
+PartialCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 from app.determination.decider import Determination, decide
 from app.determination.reviewer import ReviewerOutput, ReviewResult, review_case
@@ -77,6 +81,7 @@ async def evaluate_pa_case(
     registry: PolicyRegistry | None = None,
     case_id: str | None = None,
     progress_callback: ProgressCallback | None = None,
+    on_partial: PartialCallback | None = None,
 ) -> CaseRun:
     """Run the full pipeline on an inbound PAS Bundle.
 
@@ -91,10 +96,13 @@ async def evaluate_pa_case(
       8. Reviewer agent → narrative + refined missing-info
       9. Build outbound PAS ClaimResponse Bundle
 
-    If `progress_callback` is provided, it is invoked at each of the 6
-    user-visible stage boundaries (parsing, intake, selecting, adjudicating,
-    reviewing, building_response). The callback is async and should be
-    cheap — typically used to write Case.processing_stage to the DB.
+    Callbacks:
+      progress_callback(stage)  — fires at each stage boundary so callers can
+                                  write Case.processing_stage to the DB.
+      on_partial(fields)        — fires after each step finishes producing
+                                  results. `fields` is a dict of Case columns
+                                  that are now known. Lets a polling UI see
+                                  data appear progressively.
     """
     case_id = case_id or f"case-{uuid.uuid4().hex[:10]}"
     log.info("orchestrator.start", case_id=case_id)
@@ -105,6 +113,13 @@ async def evaluate_pa_case(
                 await progress_callback(stage)
             except Exception as e:
                 log.warning("orchestrator.progress_callback_failed", stage=stage, error=str(e))
+
+    async def _emit(partial: dict[str, Any]) -> None:
+        if on_partial is not None and partial:
+            try:
+                await on_partial(partial)
+            except Exception as e:
+                log.warning("orchestrator.on_partial_failed", error=str(e))
 
     await _step("parsing")
     parsed = parse_pas_bundle(bundle_data)
@@ -120,8 +135,8 @@ async def evaluate_pa_case(
     intake: IntakeResult | None = None
     if run_intake_on_documents and documents:
         await _step("intake")
-        # Smith case has one DocumentReference + one Binary; intake one doc.
-        # For multi-doc cases we'd merge ExtractedFacts; keep the prototype scope to first doc.
+        # One DocumentReference + Binary per case in the prototype. For
+        # multi-doc cases we'd merge ExtractedFacts; keep scope to first doc.
         first_doc = next(iter(documents.values()))
         try:
             intake = await run_intake(first_doc)
@@ -131,6 +146,7 @@ async def evaluate_pa_case(
                 citations_passed=intake.citation_passed,
                 citations_failed=intake.citation_failed,
             )
+            await _emit({"extracted_facts": intake.facts.model_dump()})
         except Exception as e:
             log.error("orchestrator.intake_failed", error=str(e))
 
@@ -142,6 +158,18 @@ async def evaluate_pa_case(
     )
     log.info("orchestrator.selection", status=selection.status,
              selected=selection.selected_policy_id, branch=selection.branch)
+
+    await _emit({
+        "selected_policy_id": selection.selected_policy_id,
+        "branch": selection.branch,
+        "policy_selection": {
+            "status": selection.status,
+            "selected_policy_id": selection.selected_policy_id,
+            "branch": selection.branch,
+            "selection_reason": selection.selection_reason,
+            "eliminated": selection.eliminated,
+        },
+    })
 
     if selection.status != "ok" or selection.selected_policy_id is None:
         # Build an error-style ClaimResponse Bundle without adjudication
@@ -160,6 +188,17 @@ async def evaluate_pa_case(
         case=case_facts,
         branch=selection.branch,
     )
+
+    await _emit({
+        "criteria_evaluation": {
+            "leaf_verdicts": {
+                cid: v.model_dump() for cid, v in adjudication.leaf_verdicts.items()
+            },
+            "exclusion_verdicts": {
+                eid: v.model_dump() for eid, v in adjudication.exclusion_verdicts.items()
+            },
+        },
+    })
 
     # Roll up
     leaf_verdict_strs = {cid: v.verdict for cid, v in adjudication.leaf_verdicts.items()}
@@ -184,6 +223,18 @@ async def evaluate_pa_case(
         case=case_facts,
     )
 
+    await _emit({
+        "outcome": determination.outcome,
+        "determination": {
+            "outcome": determination.outcome,
+            "rationale": determination.rationale,
+            "triggered_exclusions": determination.triggered_exclusions,
+            "escalation_reasons": determination.escalation_reasons,
+            "narrative": reviewer.output.narrative,
+            "missing_info": [mi.model_dump() for mi in reviewer.output.missing_info],
+        },
+    })
+
     # Build outbound Bundle
     await _step("building_response")
     response = build_pas_response_bundle(
@@ -195,6 +246,8 @@ async def evaluate_pa_case(
         reviewer=reviewer.output,
         case_id=case_id,
     )
+
+    await _emit({"pas_response_bundle": response.bundle})
 
     return CaseRun(
         case_id=case_id,
@@ -212,6 +265,7 @@ async def evaluate_pa_case(
 def _documents_from_bundle(parsed: ParsedBundle) -> dict[str, ExtractedDocument]:
     """Decode every Binary PDF in the Bundle and return ExtractedDocuments keyed
     by DocumentReference.id (preferred) or Binary.id (fallback)."""
+    import os
     import tempfile
 
     docs: dict[str, ExtractedDocument] = {}
@@ -237,12 +291,19 @@ def _documents_from_bundle(parsed: ParsedBundle) -> dict[str, ExtractedDocument]
 
     for doc_id, bid in pairs:
         pdf_bytes = binaries[bid]
-        # extract_pdf takes a path; write to a temp file
+        # extract_pdf takes a path; stage through a temp file, then unlink so
+        # we don't leak one PDF per case into /tmp for the process lifetime.
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(pdf_bytes)
             tmp_path = f.name
-        doc = extract_pdf(tmp_path, document_id=doc_id)
-        docs[doc_id] = doc
+        try:
+            doc = extract_pdf(tmp_path, document_id=doc_id)
+            docs[doc_id] = doc
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     return docs
 

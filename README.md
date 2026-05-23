@@ -195,7 +195,8 @@ Latitude_POC/
 │   └── pa-reviewer/SKILL.md               system prompt for the reviewer
 ├── policies/
 │   ├── molina-mcp-032.json                ESI policy — 22 leaves + 10 exclusions (44 verified citations)
-│   ├── molina-gyn-hyst-039.json           Hysterectomy policy — 15 leaves + ONE_OF(SectionA, SectionB), 17 verified citations
+│   ├── oregon-hcr-39.json                 Hysterectomy for adenomyosis — Oregon Prioritized List Guideline Note 39
+│   ├── masshealth-anti-obesity.json       MassHealth tirzepatide (Zepbound) PA criteria
 │   └── sources/                           canonical PDF sources (citation verification targets)
 ├── frontend-react/                       React UI (Vite + TS + Tailwind + shadcn/ui)
 │   ├── src/
@@ -280,9 +281,10 @@ Latitude assessment package and aren't republished). To run the full demo:
 
 1. Place your `David_Smith_Clinical.pdf` and `Catherine Welsh MR.pdf` (or
    any other clinical PDFs you want to test) inside `clinical_pdfs/`.
-2. The two **policy** JSONs (`molina-mcp-032.json`, `molina-gyn-hyst-039.json`)
-   are tracked, and their **source PDFs** are in `policies/sources/` (also
-   tracked) — so policy loading + citation verification works on a fresh clone.
+2. The **policy** JSONs (`molina-mcp-032.json`, `oregon-hcr-39.json`,
+   `masshealth-anti-obesity.json`) are tracked, and their **source PDFs**
+   are in `policies/sources/` (also tracked) — so policy loading + citation
+   verification works on a fresh clone.
 3. Without `clinical_pdfs/David_Smith_Clinical.pdf`, `make seed` errors
    with `PDF not found`. Either supply one or use `--pdf <some-other.pdf>`.
 4. The doctor UI's file uploader works with **any** clinical PDF — drop in
@@ -359,13 +361,13 @@ Then ask Claude: *"Evaluate the latest PA case and show me the missing-info requ
 - Conservative therapy incomplete (PT planned-not-completed)
 - Reviewer asks for documentation of either completed PT or imaging-correlation contraindication rationale
 
-### Case 2 — Catherine Welsh (hysterectomy for adenomyosis, OR → routes to molina-gyn-hyst-039)
+### Case 2 — Catherine Welsh (hysterectomy for adenomyosis, OR → routes to oregon-hcr-39)
 
-55yo female, Oregon Medicaid (re-badged Molina for demo). Epic-style chart export. **No CPT written anywhere in the document.** Patient diagnoses include N80.03 (adenomyosis), N94.6 (dysmenorrhea), I26.99 (PE), D68.59 (Protein S deficiency). Tried Mirena IUD (painful intercourse), DMPA (side effects), ibuprofen 800mg TID. US shows "heterogeneous myometrium, suggestive of possible adenomyosis." Plan: "Will proceed with TLH, BS, cysto" buried in Encounter #4 Assessment & Plan.
+55yo female, Oregon Medicaid. Epic-style chart export. **No CPT written anywhere in the document.** Patient diagnoses include N80.03 (adenomyosis), N94.6 (dysmenorrhea), I26.99 (PE), D68.59 (Protein S deficiency). Tried Mirena IUD (painful intercourse), DMPA (side effects), ibuprofen 800mg TID. US shows "heterogeneous myometrium, suggestive of possible adenomyosis." Plan: "Will proceed with TLH, BS, cysto" buried in Encounter #4 Assessment & Plan.
 
 **Metadata extractor infers** CPT 58571 (total laparoscopic hysterectomy with removal of tubes/ovaries) from the "TLH, BS, cysto" phrasing — citing the page in `extraction_notes`. State inferred as OR from "Womens Health Center of Southern Oregon" and "Medford, OR" lab addresses.
 
-**System routes to** `molina-gyn-hyst-039` (Hysterectomy policy, OR footprint, CPT 58571 in covered list, ICD-10 N80.03 matches `N80.*`).
+**System routes to** `oregon-hcr-39` (Oregon Prioritized List Guideline Note 39 — adenomyosis branch, OR footprint, CPT 58571 in covered list, ICD-10 N80.03 matches `N80.*`).
 
 **Outcome:** `pend` (Section B adenomyosis pathway). Reviewer asks for:
 - Duration confirmation of hormonal therapy trial

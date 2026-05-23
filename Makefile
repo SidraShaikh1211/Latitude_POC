@@ -25,7 +25,10 @@ seed:
 	$(PY) -m scripts.seed_smith_case
 
 run:
-	$(UVICORN) app.main:app --reload --host 0.0.0.0 --port 8000
+	# --reload-dir app: only restart on backend code edits. Skill prompts,
+	# policies, the React app, and the SQLite DB don't trigger reloads, so
+	# in-flight pipelines aren't killed by an unrelated file save.
+	$(UVICORN) app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
 
 ui-install:
 	cd frontend-react && npm install

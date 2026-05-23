@@ -88,6 +88,46 @@ def _normalize_icd10(codes: list[ICD10Code] | list[dict]) -> list[ICD10Code]:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+# CPT ranges that imply "surgical" rather than "procedural". The CPT surgery
+# section is 10000-69999, but the system's PA scope only intersects with a
+# narrow slice — keep this list explicit so a new surgical PA doesn't silently
+# slip through as procedural.
+_SURGICAL_CPT_RANGES: tuple[tuple[int, int], ...] = (
+    (22000, 22999),   # spine surgery (laminectomy, fusion)
+    (27000, 27999),   # orthopedic — hip/knee
+    (47000, 47999),   # open abdominal
+    (58000, 58999),   # gynecologic surgery (hysterectomy etc.)
+)
+
+
+def _infer_request_category(cpt_code: str) -> str:
+    """Map a CPT/HCPCS code to a request_category the selector understands.
+
+    - "pharmacy"  — HCPCS J-codes or known drug-name codes (e.g. tirzepatide)
+    - "surgical"  — CPT in one of the _SURGICAL_CPT_RANGES
+    - "procedural" — default for everything else (injections, E&M, imaging)
+    """
+    code = (cpt_code or "").strip()
+    if not code:
+        return "procedural"
+    # Pharmacy: HCPCS J-code or any non-numeric drug-name code
+    if code.startswith("J") or not code[0].isdigit():
+        return "pharmacy"
+    try:
+        num = int(code[:5])
+    except ValueError:
+        return "procedural"
+    for low, high in _SURGICAL_CPT_RANGES:
+        if low <= num <= high:
+            return "surgical"
+    return "procedural"
+
+
+# ---------------------------------------------------------------------------
 # Builders (per-resource)
 # ---------------------------------------------------------------------------
 
@@ -192,6 +232,13 @@ def _practitioner(sub: SubmissionData, ids: "_Ids") -> dict:
 
 
 def _service_request(sub: SubmissionData, ids: "_Ids") -> dict:
+    category_text = _infer_request_category(sub.cpt_code)
+    # Map our category to a SNOMED code so the FHIR shape stays valid.
+    snomed = {
+        "surgical":   ("387713003", "Surgical procedure"),
+        "procedural": ("103693007", "Diagnostic procedure"),
+        "pharmacy":   ("440655000", "Outpatient pharmacy service"),
+    }.get(category_text, ("103693007", "Diagnostic procedure"))
     return {
         "resourceType": "ServiceRequest",
         "id": ids.service_request,
@@ -200,10 +247,10 @@ def _service_request(sub: SubmissionData, ids: "_Ids") -> dict:
         "category": [{
             "coding": [{
                 "system": "http://snomed.info/sct",
-                "code": "387713003",
-                "display": "Surgical procedure",
+                "code": snomed[0],
+                "display": snomed[1],
             }],
-            "text": "procedural",
+            "text": category_text,
         }],
         "code": {
             "coding": [{

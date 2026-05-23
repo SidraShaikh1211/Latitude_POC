@@ -111,10 +111,18 @@ class AnthropicClient:
         api_key: str | None = None,
         model: str | None = None,
         max_retries: int = 3,
+        timeout: float = 60.0,
     ) -> None:
         self._api_key = api_key or settings.anthropic_api_key
         self._model = model or settings.anthropic_model
-        self._client = AsyncAnthropic(api_key=self._api_key, max_retries=max_retries)
+        # Explicit per-request timeout: without it, AsyncAnthropic defaults to
+        # 600s, so a single hung HTTP call can hold an adjudicator iteration
+        # for 10 minutes. With max_retries=3 and an 8-iteration agent loop,
+        # that compounds into pipelines that never terminate from the caller's
+        # perspective. 60s is generous for one Claude turn.
+        self._client = AsyncAnthropic(
+            api_key=self._api_key, max_retries=max_retries, timeout=timeout,
+        )
 
     @property
     def model(self) -> str:

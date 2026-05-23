@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   ChevronRight,
@@ -29,12 +29,9 @@ import {
 } from "@/components/ui/accordion";
 import { ExtractedMetadataPanel } from "@/components/ExtractedMetadataPanel";
 import { OutcomeBadge } from "@/components/OutcomeBadge";
-import {
-  getCase,
-  getSubmission,
-  listSubmissions,
-  submitDoctorPdf,
-} from "@/lib/api";
+import { getPolicy, listSubmissions, submitDoctorPdf } from "@/lib/api";
+import { useCaseStream, useSubmissionStream } from "@/lib/sse";
+import type { CriterionNode, PolicyDetail } from "@/types/api";
 import type {
   CaseDetail,
   ProcessingStage,
@@ -207,7 +204,7 @@ export function DoctorWorkspace() {
 }
 
 // ---------------------------------------------------------------------------
-// Submissions list — per-submission polling
+// Submissions list — per-submission SSE subscriptions (no polling)
 // ---------------------------------------------------------------------------
 
 function SubmissionsList({
@@ -223,46 +220,22 @@ function SubmissionsList({
     ...submissions.filter((s) => !highlight.includes(s.submission_id)),
   ];
 
-  // Poll each *active* submission every 2s. Stops once state="sent" or "failed"
-  // (the case-side polling takes over after that).
-  const subQueries = useQueries({
-    queries: ordered.map((s) => ({
-      queryKey: ["submission", s.submission_id],
-      queryFn: () => getSubmission(s.submission_id),
-      initialData: s,
-      refetchInterval: (q: { state: { data?: Submission } }) => {
-        const st = q.state.data?.state;
-        return st === "sent" || st === "failed" ? false : 2000;
-      },
-    })),
-  });
-
-  // For submissions that have handed off, poll the payer case too.
-  const payerCaseIds = subQueries.map((q) => q.data?.payer_case_id ?? null);
-
-  const caseQueries = useQueries({
-    queries: ordered.map((_, i) => ({
-      queryKey: ["case", payerCaseIds[i] ?? "none"],
-      queryFn: () => getCase(payerCaseIds[i]!),
-      enabled: !!payerCaseIds[i],
-      refetchInterval: (q: { state: { data?: CaseDetail } }) => {
-        const stage = q.state.data?.processing_stage;
-        return stage === "complete" || stage === "failed" ? false : 2000;
-      },
-    })),
-  });
-
   return (
     <div className="space-y-4">
-      {ordered.map((s, i) => (
-        <SubmissionCard
-          key={s.submission_id}
-          submission={subQueries[i].data ?? s}
-          caseData={caseQueries[i].data}
-        />
+      {ordered.map((s) => (
+        <LiveSubmissionCard key={s.submission_id} initial={s} />
       ))}
     </div>
   );
+}
+
+// Subscribes to the submission's SSE stream; once the submission has handed
+// off to a payer case, also subscribes to the case stream. Both EventSources
+// auto-close when their topic reaches a terminal state.
+function LiveSubmissionCard({ initial }: { initial: Submission }) {
+  const sub = useSubmissionStream(initial.submission_id, initial) ?? initial;
+  const caseData = useCaseStream(sub.payer_case_id ?? null);
+  return <SubmissionCard submission={sub} caseData={caseData} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -487,36 +460,185 @@ function PayerComplete({
       </Alert>
     );
   }
+  return (
+    <DoctorOutcome caseDetail={caseDetail} payerCaseId={payerCaseId} />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Doctor-facing outcome view
+// ---------------------------------------------------------------------------
+//
+// Distinct from the payer detail page: this surface answers the doctor's two
+// questions — "what was the decision?" and "what do I need to send next?" —
+// and anchors each answer with the verbatim policy text and the matching
+// patient-document quote so they can see exactly what the payer saw.
+function DoctorOutcome({
+  caseDetail,
+  payerCaseId,
+}: {
+  caseDetail: CaseDetail;
+  payerCaseId: string;
+}) {
   const det = caseDetail.determination;
-  const missing = det?.missing_info ?? [];
+  const policyId = caseDetail.selected_policy_id ?? undefined;
+
+  // Fetch the selected policy so we can resolve each missing-info's
+  // criterion_id back to its verbatim policy quote.
+  const policyQuery = useQuery({
+    queryKey: ["policy-detail", policyId],
+    queryFn: () => getPolicy(policyId!),
+    enabled: !!policyId,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (!det) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Awaiting the payer's determination…
+      </p>
+    );
+  }
+
+  // Build the gap list: one entry per missing-info item, hydrated with the
+  // policy citation (from the policy tree) and the patient evidence (from
+  // the adjudicator's leaf verdict).
+  const policyIndex = policyQuery.data
+    ? indexPolicyByCriterion(policyQuery.data)
+    : new Map<string, { node: CriterionNode; path: string[] }>();
+  const leafVerdicts = caseDetail.criteria_evaluation?.leaf_verdicts ?? {};
+  const gaps = (det.missing_info ?? []).map((m) => {
+    const policyHit = policyIndex.get(m.criterion_id);
+    const verdict = leafVerdicts[m.criterion_id];
+    return {
+      ...m,
+      policy_citation: policyHit?.node.policy_citation ?? null,
+      criterion_label: policyHit?.node.description ?? m.criterion_id,
+      patient_evidence:
+        (verdict?.patient_evidence ?? []).filter((e) => e.quote)[0] ?? null,
+      gap_reasoning: verdict?.reasoning ?? null,
+    };
+  });
+
+  const isPend = caseDetail.outcome === "pend";
+  const isDeny = caseDetail.outcome === "deny";
+  const isApprove = caseDetail.outcome === "approve";
+
   return (
     <div className="space-y-4">
-      <OutcomeBadge outcome={caseDetail.outcome} />
-      {det?.narrative && (
-        <div>
-          <h4 className="font-semibold mb-1 text-sm">Reviewer narrative</h4>
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">
-            {det.narrative}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <OutcomeBadge outcome={caseDetail.outcome} />
+        {policyId && (
+          <p className="text-xs text-muted-foreground">
+            Reviewed against{" "}
+            <code className="text-violet-900">{policyId}</code>
+            {caseDetail.branch && (
+              <>
+                {" "}· branch <code>{caseDetail.branch}</code>
+              </>
+            )}
           </p>
-        </div>
-      )}
-      {missing.length > 0 && (
-        <div className="space-y-2">
+        )}
+      </div>
+
+      {/* One-line summary above the detail */}
+      <p className="text-sm leading-relaxed">
+        {isApprove && (
+          <>
+            <strong>Approved.</strong> The payer found every required criterion
+            documented in your submission.
+          </>
+        )}
+        {isDeny && (
+          <>
+            <strong>Denied.</strong>{" "}
+            {det.rationale ??
+              "The payer found an exclusion or a critical missing criterion."}
+          </>
+        )}
+        {isPend && (
+          <>
+            <strong>Pended.</strong> The payer could not complete the
+            determination with the documentation you provided. Please respond
+            to the items below.
+          </>
+        )}
+      </p>
+
+      {/* Per-gap detail — only the failing items, each with dual citations */}
+      {gaps.length > 0 && (
+        <div className="space-y-3">
           <h4 className="font-semibold text-sm">
-            📨 Missing information requested ({missing.length})
+            📨 What you need to send ({gaps.length})
           </h4>
-          {missing.map((m) => (
-            <div key={m.id} className="rounded-md border p-3 bg-amber-50">
+          {gaps.map((g) => (
+            <div
+              key={g.id}
+              className="rounded-md border border-amber-200 bg-amber-50/60 p-3 space-y-2"
+            >
               <p className="text-sm">
-                <strong>{m.id}</strong> — {m.request}
+                <strong>{g.request}</strong>
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Criterion <code>{m.criterion_id}</code>
-              </p>
+              {g.gap_reasoning && (
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {g.gap_reasoning}
+                </p>
+              )}
+              <div className="grid gap-2 md:grid-cols-2 text-xs">
+                {g.policy_citation && (
+                  <div className="rounded bg-white border p-2">
+                    <p className="font-semibold mb-1 text-violet-900">
+                      Policy says (p.{g.policy_citation.page})
+                    </p>
+                    <p className="text-muted-foreground italic">
+                      "{g.policy_citation.quote}"
+                    </p>
+                  </div>
+                )}
+                {g.patient_evidence?.quote && (
+                  <div className="rounded bg-white border p-2">
+                    <p className="font-semibold mb-1 text-sky-900">
+                      Your record (p.{g.patient_evidence.page ?? "?"})
+                    </p>
+                    <p className="text-muted-foreground italic">
+                      "{g.patient_evidence.quote}"
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
       )}
+
+      {/* Triggered exclusions (deny path) — show with policy citation */}
+      {isDeny &&
+        det.triggered_exclusions &&
+        det.triggered_exclusions.length > 0 && (
+          <div className="space-y-2">
+            <h4 className="font-semibold text-sm">⛔ Triggered exclusions</h4>
+            {det.triggered_exclusions.map((exId) => {
+              const ex = policyQuery.data?.exclusions.find((e) => e.id === exId);
+              return (
+                <div
+                  key={exId}
+                  className="rounded-md border border-red-200 bg-red-50/60 p-3 text-xs space-y-1"
+                >
+                  <p className="font-semibold text-red-900">
+                    {exId} {ex?.description && `— ${ex.description}`}
+                  </p>
+                  {ex?.policy_citation && (
+                    <p className="text-muted-foreground italic">
+                      Policy (p.{ex.policy_citation.page}): "
+                      {ex.policy_citation.quote}"
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
       <Button asChild variant="outline" size="sm">
         <Link to={`/payer/${payerCaseId}`}>
           View full payer detail <ChevronRight className="h-4 w-4" />
@@ -524,4 +646,18 @@ function PayerComplete({
       </Button>
     </div>
   );
+}
+
+// Flatten the policy criteria tree into a criterion_id → {node, path} map so
+// we can resolve a missing-info's criterion_id back to its policy citation.
+function indexPolicyByCriterion(
+  policy: PolicyDetail,
+): Map<string, { node: CriterionNode; path: string[] }> {
+  const out = new Map<string, { node: CriterionNode; path: string[] }>();
+  const walk = (node: CriterionNode, path: string[]) => {
+    out.set(node.id, { node, path });
+    for (const c of node.children ?? []) walk(c, [...path, node.id]);
+  };
+  walk(policy.criteria, []);
+  return out;
 }
