@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 .env
 .claude/
+clinical_pdfs/
 data/app.db
 data/app.db-journal
 data/app.db-wal
