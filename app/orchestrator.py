@@ -5,7 +5,7 @@ produces a fully-resolved case (selection + adjudication + decision +
 reviewer narrative + outbound ClaimResponse Bundle). Shared by:
   - REST API:  POST /fhir/Claim/$submit
   - MCP tool:  evaluate_prior_auth
-  - Streamlit demo seeding
+  - Seed script: scripts/seed_smith_case.py
 """
 
 from __future__ import annotations

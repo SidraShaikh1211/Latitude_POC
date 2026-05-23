@@ -17,7 +17,7 @@ Both cases enter the system the **same way** — a doctor uploads the PDF, nothi
 | 1 | **Ingestion of synthetic / de-identified clinical notes** | `app/extraction/pdf.py` (PyMuPDF text + offsets) handles two real document formats: fax bundles (Smith — 23 pages with fax headers, smart-quote artifacts) and EMR exports (Welsh — 15 pages of structured Epic-style encounters). Real-world PDF artifacts (zero-width spaces, smart quotes, inline ICD-10 codes like `ADENOMYOSIS (N80.03)`) handled in `app/llm/citation_verify.py`. |
 | 2 | **AI-Powered FHIR Structuring (MCP-aligned)** | Two-stage LLM extraction. (a) `app/extraction/metadata.py` runs **before** Bundle assembly — Claude structured-output infers `SubmissionData` (CPT, ICD-10, patient, coverage) from the PDF, including CPT inference from clinical context when no code is written. (b) `app/extraction/intake.py` runs **after** Bundle parsing — Claude structured-output turns the same PDF into Patient / Conditions / Observations / Medications / Procedures / Allergies / DiagnosticReports with verbatim citations. Every citation is substring-verified against the source PDF (`app/llm/citation_verify.py`); resources with failed citations are dropped. The MCP server (`app/mcp_server/server.py`) exposes the same backend over stdio. |
 | 3 | **Document Comparison for Coverage (A2A simulation)** | Two policies loaded from `policies/*.json` (ESI + hysterectomy) — `app/policy/registry.py` substring-verifies all 61 quotes at startup (fail-loud on miss). `app/policy/selector.py` is the deterministic policy selector — filters by CPT, ICD-10 glob, payer, LOB, state, age, care-setting, then resolves ties by specificity score. `app/policy/adjudicator.py` is the per-criterion Claude agent (5-tool surface, parallel via `asyncio.gather`, prompt-cached). The A2A endpoint `POST /fhir/Claim/$submit` accepts a Bundle and returns a Da Vinci PAS `ClaimResponse` Bundle. A doctor-facing endpoint `POST /v1/doctor/submit` accepts a raw PDF and does the same. |
-| 4 | **Prototype: citations + criteria + insight + production roadmap** | Streamlit UI (`frontend/`) with two roles. **Doctor workspace** — drop a PDF, watch live status (📋 Reading PDF → 📨 Payer received → 🔍 Analysis in progress → outcome), then see the brief Reviewer narrative + missing-info requests + extracted-metadata transparency panel + outbound Bundle. **Payer inbox + case detail** — three-panel workspace with structured FHIR + criteria tree (verdict badges, expandable per-criterion: policy quote + patient evidence quote + reasoning) + determination. Production-evolution section below. |
+| 4 | **Prototype: citations + criteria + insight + production roadmap** | React UI (`frontend-react/` — Vite + TypeScript + Tailwind + shadcn/ui) with two roles. **Doctor workspace** — drop a PDF, watch live status (📋 Reading PDF → 📨 Payer received → 🔍 Analysis in progress → outcome), then see the brief Reviewer narrative + missing-info requests + extracted-metadata transparency panel + outbound Bundle. **Payer inbox + case detail** — three-panel workspace with structured FHIR + criteria tree (verdict badges, expandable per-criterion: policy quote + patient evidence quote + reasoning) + determination. Production-evolution section below. |
 
 ---
 
@@ -107,9 +107,9 @@ POST /v1/doctor/submit   (or POST /fhir/Claim/$submit for an already-assembled B
 
 **External surfaces, one backend:**
 - REST API (FastAPI) — `POST /fhir/Claim/$submit` (A2A entry, accepts a Bundle), `POST /v1/doctor/submit` (PDF-only doctor entry), `/v1/cases/*` and `/v1/policies/*` convenience endpoints
-- MCP server (stdio, Claude Desktop compatible) — 6 tools, 3 prompts, 2 URI schemes
+- MCP server — 6 tools, 3 prompts, 2 URI schemes. Mounted at `/mcp` on the FastAPI process (Streamable HTTP); also runnable as a stdio process via `python -m app.mcp_server.server` for Claude Desktop
 - A2A Agent Card at `/.well-known/agent.json`
-- Streamlit UI with role picker → Doctor Workspace or Payer Inbox + Detail
+- React UI (Vite + TypeScript + Tailwind + shadcn/ui) with role picker → Doctor Workspace or Payer Inbox + Detail
 
 ---
 
@@ -120,10 +120,10 @@ POST /v1/doctor/submit   (or POST /fhir/Claim/$submit for an already-assembled B
 | Backend | FastAPI + Pydantic + uvicorn | Pydantic integrates with FHIR shapes; async-native for parallel LLM I/O; OpenAPI free at `/docs`; native multipart for PDF uploads |
 | FHIR | `fhir.resources` 8.2 (R4B) | R4 shape validation without HAPI overhead |
 | LLM | `anthropic` SDK, `claude-sonnet-4-6` | Cost/capability balance; prompt caching for ~80% reduction on cacheable portions; tool-use for structured-output coercion |
-| MCP | official `mcp` Python package | stdio transport mounted as `python -m app.mcp_server.server` |
+| MCP | official `mcp` Python package | Streamable HTTP transport mounted at `/mcp` on the FastAPI process; same `Server` instance also reachable as stdio via `python -m app.mcp_server.server` |
 | PDF | `pymupdf` | Citation needs page coordinates; no OCR fallback (both test PDFs text-extract cleanly) |
 | DB | SQLite + SQLAlchemy + aiosqlite (WAL mode) | Sufficient for prototype; Postgres is a one-line swap |
-| UI | Streamlit (text-excerpt citations) | Fast iteration; no PDF iframe (deliberately avoided); `@st.fragment(run_every=2)` for live status polling |
+| UI | React 18 + Vite + TypeScript + Tailwind + shadcn/ui (Radix primitives) | TanStack Query for typed fetching + per-case polling that auto-stops on terminal stage; text-excerpt citations rather than PDF iframes |
 | Logging | `structlog` (JSON) | Distributed-trace-friendly out of the box |
 | Tests | `pytest` + `pytest-asyncio` | 149 unit + integration + L0/L1 eval tests; 16 LLM-gated for L2/L3 |
 
@@ -141,7 +141,6 @@ These were considered and explicitly cut to fit the prototype scope. Each is one
 - **US Core profile validation** — base R4 sufficient
 - **OAuth / SMART on FHIR** — mock with API keys in `.env`
 - **OCR fallback** — both test PDFs text-extract cleanly
-- **React UI** — Streamlit is faster to iterate
 - **Deployment (Fly.io / Cloud Run)** — local-only by design; deploy is one Dockerfile away
 - **Langfuse / OpenTelemetry** — structlog JSON logs + `Usage` accounting are enough for this scope
 - **Pre-baked fixtures** — every case enters via the live PDF→extractor→bundle path; there are no hardcoded patient bundles
@@ -198,12 +197,18 @@ Latitude_POC/
 │   ├── molina-mcp-032.json                ESI policy — 22 leaves + 10 exclusions (44 verified citations)
 │   ├── molina-gyn-hyst-039.json           Hysterectomy policy — 15 leaves + ONE_OF(SectionA, SectionB), 17 verified citations
 │   └── sources/                           canonical PDF sources (citation verification targets)
-├── frontend/
-│   ├── app.py                             landing — role picker + loaded policies summary
-│   └── pages/
-│       ├── 01_doctor_workspace.py         PDF upload + live status + brief outcome (no form fields)
-│       ├── 02_payer_inbox.py              case list with status badges
-│       └── 03_payer_case_detail.py        three-panel workspace (FHIR + criteria tree + determination)
+├── frontend-react/                       React UI (Vite + TS + Tailwind + shadcn/ui)
+│   ├── src/
+│   │   ├── main.tsx                      router + TanStack Query provider
+│   │   ├── lib/api.ts                    typed fetch wrappers
+│   │   ├── types/api.ts                  Verdict, Outcome, CaseDetail, PolicyDetail...
+│   │   ├── components/                   AppLayout, FhirPanel, CriteriaTree, OutcomeBadge...
+│   │   └── pages/
+│   │       ├── Landing.tsx               role picker + loaded policies
+│   │       ├── DoctorWorkspace.tsx       PDF upload + per-case polling every 2s
+│   │       ├── PayerInbox.tsx            case list with status badges
+│   │       └── PayerCaseDetail.tsx       three-panel workspace (FHIR + criteria tree + determination)
+│   └── package.json                      vite, react-router, @tanstack/react-query, radix
 ├── tests/
 │   ├── unit/                              ~115 unit tests (synthetic Bundles, no fixture dependency)
 │   ├── integration/                       end-to-end snapshot tests
@@ -238,14 +243,34 @@ make seed
 # OR: any other PDF:
 # .venv/bin/python -m scripts.seed_smith_case --pdf path/to/some.pdf --case-id custom-001
 
-# Terminal A — backend (FastAPI on :8000, /docs, MCP info)
+# Terminal A — backend (FastAPI on :8000, /docs, MCP at /mcp)
 make run
 
-# Terminal B — UI
-make ui                                         # http://localhost:8501
+# Terminal B — React UI (one-time install, then dev server)
+make ui-install                                 # first time only
+make ui                                         # Vite, http://localhost:5173
 
 # Run tests
 make test                                       # 149 tests + 16 LLM-gated skipped
+```
+
+### React UI (Vite + TypeScript + Tailwind + shadcn/ui)
+
+`frontend-react/` is the UI. It talks to the FastAPI backend over HTTP;
+FastAPI has CORS enabled for the Vite dev origin (`:5173`) and preview
+(`:4173`). Four screens: landing, doctor workspace with live polling,
+payer inbox, payer case detail.
+
+```bash
+make ui-install      # cd frontend-react && npm install (one-time)
+make ui              # vite dev server on :5173 (HMR)
+make ui-build        # production build to frontend-react/dist/
+```
+
+Override the API base at build time or in `frontend-react/.env`:
+
+```bash
+VITE_API_BASE=http://127.0.0.1:8000 npm run dev
 ```
 
 ### Demo PDFs
@@ -380,7 +405,7 @@ What this prototype shows about how the design would evolve toward production us
 
 1. **FHIR APIs at scale** — `/fhir/Claim/$submit` is the contract. To productionize: add HAPI FHIR persistence (so `Claim` and `ClaimResponse` resources are addressable by ID), wire SMART-on-FHIR / OAuth client credentials, add IG profile validation (Da Vinci PAS, US Core).
 2. **A2A endpoints** — `/.well-known/agent.json` advertises capabilities today. Production would add JWT-bearer auth, rate limiting, signed responses (FHIR Verifiable Credentials), and an outbound webhook channel for asynchronous determinations.
-3. **MCP orchestration** — the MCP server today exposes the backend over stdio. Production paths: (a) Streamable HTTP transport for remote clients, (b) per-payer policy registries federated under one root, (c) MCP prompts that walk a clinician through case-construction.
+3. **MCP orchestration** — the MCP server exposes the backend over Streamable HTTP at `/mcp` and stdio. Production paths: (a) per-payer policy registries federated under one root, (b) MCP prompts that walk a clinician through case-construction, (c) OAuth / bearer-token auth on the HTTP transport for non-local clients.
 4. **Adjudicator iteration** — the agent's tool calls and verdicts are persisted in `audit_log` for replay. Production would ingest these into Langfuse / OpenTelemetry, run per-policy CI on every policy JSON edit, and use medical-director feedback to fine-tune the Reviewer.
 5. **Policy authoring** — `policies/*.json` is hand-authored today, with substring-grep validation. Production would add: (a) a policy authoring UI for clinical analysts (not engineers), (b) automated re-authoring when source PDFs are republished, (c) versioning + A/B testing across policy versions.
 6. **Multi-payer** — currently both policies are tagged as Molina for demo simplicity. The selector already supports multi-payer; production would load each real payer's policy library and route via `Coverage.payor` from the inbound Bundle.
@@ -393,7 +418,7 @@ What this prototype shows about how the design would evolve toward production us
 - **Cost per case** is $1.5-2 (above the $0.30 design target). The adjudicator hits max-iterations on hard leaves; with iteration budget tuning and longer cache TTLs it should drop to ~$0.50.
 - **Intake citation pass rate** is ~95-98% on real PDFs (PDF artifacts like smart-quotes and zero-width spaces cause occasional drops). Production would add OCR fallback + character-class normalization to push to 100%.
 - **AT_LEAST_K operator** is implemented and unit-tested but not currently exercised by either loaded policy (no natural "at least 2 of N" criterion in the source texts). Reserved for future policies.
-- **Streamable HTTP MCP** would be a nice-to-have over the current stdio-only transport. The agent loop architecture doesn't change; only the transport wrapper.
+- **MCP transport** runs both Streamable HTTP (at `/mcp` on the FastAPI process) and stdio (`python -m app.mcp_server.server`). The HTTP transport is stateless — fine for the one-shot tool calls in this prototype; long-lived subscriptions / resumable streams would require flipping to a stateful session manager.
 - **Two policies loaded.** Adding more is a JSON-file drop into `policies/`. The selector eval (cases S11, S12) already proves multi-policy disambiguation works.
 - **Payer is hardcoded to "molina"** in the metadata extractor default when no insurance info is in the PDF. Production would route based on real `Coverage.payor` from the EHR submission.
 

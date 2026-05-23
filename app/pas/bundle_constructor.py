@@ -3,7 +3,7 @@
 Builds a complete PAS Claim Bundle from a SubmissionData payload — the
 clinical metadata + the patient PDF. Used by:
   - scripts/seed_smith_case.py (Smith fixture generation)
-  - app/api/doctor.py (doctor-uploaded submissions via Streamlit UI)
+  - app/api/doctor.py (POST /v1/doctor/submit — doctor-uploaded PDFs)
 
 The Bundle shape and resource IDs are derived from the case_id so that
 multiple submissions can coexist (resource IDs like `patient-doc-abc123`,

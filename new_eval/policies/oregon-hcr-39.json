@@ -1,0 +1,366 @@
+{
+  "policy_id": "oregon-hcr-39",
+  "name": "Hysterectomy for Adenomyosis — Oregon Prioritized List Guideline Note 39",
+  "payer_id": "oregon-hca",
+  "version": "2025-01-01",
+  "effective_from": "2025-01-01",
+  "effective_until": null,
+
+  "source": {
+    "pdf_path": "policies/sources/oregon-hcr-39.pdf",
+    "total_pages": 2,
+    "publication_url": null,
+    "authority": "Oregon Health Authority"
+  },
+
+  "applies_to": {
+    "cpt_codes": ["58150", "58152", "58180", "58200", "58210", "58260", "58262", "58263", "58267", "58270", "58275", "58280", "58290", "58291", "58292", "58293", "58294", "58541", "58542", "58543", "58544", "58550", "58552", "58553", "58554", "58570", "58571", "58572", "58573"],
+    "hcpcs_codes": [],
+    "icd10_patterns": ["N80.*", "N94.6", "N94.8*", "N93.*", "N92.*", "N91.*"],
+    "lines_of_business": ["medicaid"],
+    "states": ["OR"],
+    "age_min": 18,
+    "age_max": null,
+    "settings_of_care": ["inpatient", "outpatient", "ambulatory-surgery-center"],
+    "request_categories": ["surgical"],
+    "branches": {
+      "adenomyosis": "Hysterectomy indicated by documented adenomyosis (Section B of Guideline Note 39)"
+    }
+  },
+
+  "criteria": {
+    "id": "root",
+    "type": "internal",
+    "operator": "ALL",
+    "description": "Medical necessity for hysterectomy in adenomyosis. ALL of patient history, failed trial, imaging, cytology, and pregnancy-status criteria must be met.",
+    "policy_citation": {
+      "page": 1,
+      "section": "Guideline Note 39 — Section B",
+      "quote": "Hysterectomy, with or without adnexectomy, for adenomyosis may be appropriate when all of the following are documented"
+    },
+    "children": [
+
+      {
+        "id": "symptoms",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Documented patient history of qualifying symptoms with duration and quality-of-life impact.",
+        "children": [
+          {
+            "id": "symptoms.duration_6mo_with_qol_impact",
+            "type": "leaf",
+            "description": "Patient history of dysmenorrhea, pelvic pain, OR abnormal uterine bleeding for more than six months, with documented negative impact on quality of life.",
+            "policy_citation": {
+              "page": 1,
+              "section": "Guideline Note 39 — Section B(1)",
+              "quote": "Patient history of dysmenorrhea, pelvic pain or abnormal uterine bleeding for more than six months with a negative effect on her quality of life"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Condition", "Observation", "ClinicalImpression"],
+              "extraction_hints": "Look for Condition codes N94.6 (dysmenorrhea), N93.* (AUB), N91.* (oligomenorrhea/AUB) plus narrative documenting symptom onset date and ADL/QoL impact (work, sleep, intimacy, activity restriction).",
+              "value_constraints": {
+                "duration_min_months": 6,
+                "requires_qol_documentation": true
+              },
+              "evaluator_kind": "llm_with_temporal_constraint"
+            },
+            "verdict_rubric": {
+              "met": "Symptom onset documented >6 months before request AND specific narrative of QoL impact present (e.g., missed work, activity restriction).",
+              "not_met": "Symptom duration <6 months OR symptom history not in qualifying categories.",
+              "unclear": "Duration documented but QoL impact narrative is vague OR vice versa.",
+              "not_documented": "No symptom history of dysmenorrhea, pelvic pain, or AUB in available records."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "failed_trial",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "Either a completed 6-month trial of hormonal therapy AND NSAIDs, OR documented contraindication to that trial.",
+        "policy_citation": {
+          "page": 1,
+          "section": "Guideline Note 39 — Section B(2)",
+          "quote": "Failure of a six-month therapeutic trial with both of the following (a and b), unless there are contraindications to use"
+        },
+        "children": [
+          {
+            "id": "failed_trial.completed",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "Completed 6-month trial of BOTH hormonal therapy AND NSAIDs.",
+            "children": [
+              {
+                "id": "failed_trial.completed.hormonal_6mo",
+                "type": "leaf",
+                "description": "Trial of hormonal therapy for at least 6 months. Acceptable agents: oral contraceptive pills/patches, progesterone-containing IUDs, injectable hormone therapy, GnRH analogs, danazol.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "Guideline Note 39 — Section B(2)(a)",
+                  "quote": "Hormonal therapy (i or ii): i) Oral contraceptive pills or patches, progesterone-containing IUDs, injectable hormone therapy, or similar ii) Agents for inducing amenorrhea (e.g., GnRH analogs or danazol)"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["MedicationRequest", "MedicationStatement", "Procedure"],
+                  "extraction_hints": "Look for OCPs (norethindrone, drospirenone, etc.), levonorgestrel-IUD (e.g., Mirena), DMPA (depot medroxyprogesterone), leuprolide, danazol. Capture start/end dates to validate 6-month duration.",
+                  "value_constraints": { "duration_min_months": 6 },
+                  "evaluator_kind": "llm_with_temporal_constraint"
+                },
+                "verdict_rubric": {
+                  "met": "Hormonal agent from listed classes documented with start and end (or current) dates spanning ≥6 months.",
+                  "not_met": "Hormonal trial documented but <6 months total duration.",
+                  "unclear": "Hormonal agent documented but dates ambiguous; agent class is borderline (e.g., topical hormones).",
+                  "not_documented": "No hormonal therapy in available records."
+                }
+              },
+              {
+                "id": "failed_trial.completed.nsaid_therapy",
+                "type": "leaf",
+                "description": "Trial of nonsteroidal anti-inflammatory drugs (NSAIDs).",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "Guideline Note 39 — Section B(2)(b)",
+                  "quote": "Nonsteroidal anti-inflammatory drugs"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["MedicationRequest", "MedicationStatement"],
+                  "extraction_hints": "Look for ibuprofen, naproxen, diclofenac, meloxicam, celecoxib, ketorolac, etc. Confirm an active or completed trial concurrent with the hormonal therapy window.",
+                  "value_constraints": {},
+                  "evaluator_kind": "llm_class_membership"
+                },
+                "verdict_rubric": {
+                  "met": "NSAID (ibuprofen/naproxen/etc.) documented as part of pain management for this condition.",
+                  "not_met": "Pain management documented but only with non-NSAID agents (e.g., acetaminophen only).",
+                  "unclear": "Generic 'pain reliever' mentioned without identification of class.",
+                  "not_documented": "No NSAID or pain medication in available records."
+                }
+              }
+            ]
+          },
+          {
+            "id": "failed_trial.contraindication",
+            "type": "leaf",
+            "description": "Documented clinical contraindication to either hormonal therapy or NSAIDs that justifies skipping the 6-month trial.",
+            "policy_citation": {
+              "page": 1,
+              "section": "Guideline Note 39 — Section B(2)",
+              "quote": "unless there are contraindications to use"
+            },
+            "evaluation": {
+              "fact_types_needed": ["AllergyIntolerance", "Condition", "ClinicalImpression"],
+              "extraction_hints": "Look for AllergyIntolerance to NSAIDs or hormonal agents; Condition history (e.g., active VTE for hormonal contraindication, GI bleed for NSAID contraindication); explicit clinician note that trial is contraindicated.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_with_temporal_constraint"
+            },
+            "verdict_rubric": {
+              "met": "Explicit documentation of a specific contraindication to at least one of hormonal or NSAID therapy (e.g., VTE history → no estrogen; active PUD → no NSAID).",
+              "not_met": "No contraindication documented and trial requirement applies.",
+              "unclear": "Patient declined therapy citing 'side effects' without clinician note of contraindication.",
+              "not_documented": "No allergy, comorbidity, or clinician statement addressing contraindication."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "imaging_findings",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "Imaging confirmation of adenomyosis: either suspicious endovaginal ultrasound or MRI junctional zone thickening.",
+        "policy_citation": {
+          "page": 1,
+          "section": "Guideline Note 39 — Section B(3)",
+          "quote": "One of the following (a or b)"
+        },
+        "children": [
+          {
+            "id": "imaging_findings.ultrasound",
+            "type": "leaf",
+            "description": "Endovaginal ultrasound findings suspicious for adenomyosis (hypoechoic myometrial echogenicity or small myometrial cysts).",
+            "policy_citation": {
+              "page": 1,
+              "section": "Guideline Note 39 — Section B(3)(a)",
+              "quote": "Endovaginal ultrasound suspicious for adenomyosis (presence of abnormal hypoechoic myometrial echogenicity or presence of small myometrial cysts)"
+            },
+            "evaluation": {
+              "fact_types_needed": ["DiagnosticReport", "Observation"],
+              "extraction_hints": "Find a TVUS/endovaginal ultrasound report describing one of the two characteristic findings.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_imaging_finding"
+            },
+            "verdict_rubric": {
+              "met": "TVUS report explicitly describes hypoechoic myometrial echogenicity or small myometrial cysts.",
+              "not_met": "TVUS report is normal or describes a different pathology.",
+              "unclear": "TVUS mentions 'possible adenomyosis' without the specific findings called out.",
+              "not_documented": "No TVUS report available."
+            }
+          },
+          {
+            "id": "imaging_findings.mri_junctional_zone",
+            "type": "leaf",
+            "description": "MRI showing junctional zone thickening greater than 12 mm.",
+            "policy_citation": {
+              "page": 1,
+              "section": "Guideline Note 39 — Section B(3)(b)",
+              "quote": "MRI showing thickening of the junctional zone > 12 mm"
+            },
+            "evaluation": {
+              "fact_types_needed": ["DiagnosticReport", "Observation"],
+              "extraction_hints": "Look for pelvic MRI report with junctional zone measurement in millimeters.",
+              "value_constraints": { "junctional_zone_min_mm": 12 },
+              "evaluator_kind": "numeric_threshold"
+            },
+            "verdict_rubric": {
+              "met": "MRI report explicitly states junctional zone thickness >12 mm.",
+              "not_met": "MRI junctional zone is ≤12 mm.",
+              "unclear": "MRI describes adenomyosis qualitatively without a numeric junctional zone measurement.",
+              "not_documented": "No pelvic MRI in available records."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "cervical_cytology",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "If a cervix is present, cervical cytology must be non-malignant.",
+        "children": [
+          {
+            "id": "cervical_cytology.nonmalignant_if_cervix_present",
+            "type": "leaf",
+            "description": "Nonmalignant cervical cytology documented if cervix is present (Pap result NILM or benign within recommended interval).",
+            "policy_citation": {
+              "page": 1,
+              "section": "Guideline Note 39 — Section B(4)",
+              "quote": "Nonmalignant cervical cytology, if cervix is present"
+            },
+            "evaluation": {
+              "fact_types_needed": ["DiagnosticReport", "Procedure"],
+              "extraction_hints": "Find Pap smear / liquid-based cervical cytology result. Acceptable: NILM, negative for intraepithelial lesion. If cervix is absent (prior trachelectomy/supracervical hysterectomy), this criterion is automatically met.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "Pap smear NILM/benign documented within standard screening interval; OR cervix is documented as absent.",
+              "not_met": "Pap smear shows HSIL, ASC-H, AGC, or other concerning finding.",
+              "unclear": "Pap result documented but interpretation language ambiguous; OR no date specified.",
+              "not_documented": "No cervical cytology in records and cervix presence not addressed."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "pregnancy_status",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "Negative preoperative pregnancy test OR documented postmenopausal status OR documented prior sterilization.",
+        "policy_citation": {
+          "page": 1,
+          "section": "Guideline Note 39 — Section B(5)",
+          "quote": "Negative preoperative pregnancy test unless patient is postmenopausal"
+        },
+        "children": [
+          {
+            "id": "pregnancy_status.negative_test",
+            "type": "leaf",
+            "description": "Negative preoperative pregnancy test (urine or serum hCG).",
+            "policy_citation": {
+              "page": 1,
+              "section": "Guideline Note 39 — Section B(5)",
+              "quote": "Negative preoperative pregnancy test"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation", "DiagnosticReport"],
+              "extraction_hints": "Look for hCG result, urine or serum, with explicit 'negative' interpretation, dated within 14 days of planned surgery.",
+              "value_constraints": { "test_within_days": 14 },
+              "evaluator_kind": "llm_with_temporal_constraint"
+            },
+            "verdict_rubric": {
+              "met": "Negative hCG documented within 14 days of planned procedure.",
+              "not_met": "Pregnancy test positive OR dated outside acceptable window.",
+              "unclear": "hCG ordered but result pending; OR test date not clearly within window.",
+              "not_documented": "No pregnancy test in pre-op records."
+            }
+          },
+          {
+            "id": "pregnancy_status.postmenopausal",
+            "type": "leaf",
+            "description": "Patient is documented as postmenopausal (≥12 months amenorrhea or age >55 with no contraindicating evidence).",
+            "policy_citation": {
+              "page": 1,
+              "section": "Guideline Note 39 — Section B(5)",
+              "quote": "unless patient is postmenopausal"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Condition", "Observation"],
+              "extraction_hints": "Look for explicit 'postmenopausal' in problem list, last menstrual period >12 months ago, or FSH >25 IU/L with absent menses.",
+              "value_constraints": { "amenorrhea_min_months": 12 },
+              "evaluator_kind": "llm_with_temporal_constraint"
+            },
+            "verdict_rubric": {
+              "met": "Postmenopausal status explicitly documented OR clear inference from LMP/FSH/age.",
+              "not_met": "Patient has documented active menses or is documented as premenopausal.",
+              "unclear": "Age suggestive but menopausal status not addressed.",
+              "not_documented": "No menopausal-status information in records."
+            }
+          },
+          {
+            "id": "pregnancy_status.previously_sterilized",
+            "type": "leaf",
+            "description": "Patient has had a prior sterilization procedure (e.g., bilateral tubal ligation, salpingectomy).",
+            "policy_citation": {
+              "page": 2,
+              "section": "Guideline Note 39 — Section B(5)",
+              "quote": "or has been previously sterilized"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Procedure"],
+              "extraction_hints": "Look for surgical history of bilateral tubal ligation/Essure/salpingectomy in past procedures.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "Procedure history shows prior tubal ligation, salpingectomy, or equivalent.",
+              "not_met": "Procedure history indicates no prior sterilization.",
+              "unclear": "Patient reports 'tubes tied' but no procedure record available.",
+              "not_documented": "No surgical history reviewed or available."
+            }
+          }
+        ]
+      }
+    ]
+  },
+
+  "exclusions": [
+    {
+      "id": "X1",
+      "description": "Hysterectomy for endometriosis without adenomyosis — covered by Section A criteria (3-month trial), not Section B.",
+      "policy_citation": {
+        "page": 1,
+        "section": "Guideline Note 39 — Section A",
+        "quote": "Hysterectomy, with or without adnexectomy, for endometriosis may be appropriate when all of the following are documented"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition"],
+        "extraction_hints": "If primary diagnosis is endometriosis (N80.0/N80.1/N80.2/N80.3/N80.8/N80.9) without adenomyosis (N80.03 specifically excluded by hierarchy), Section A criteria apply, not this policy's Section B path.",
+        "evaluator_kind": "llm_class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Primary diagnosis is endometriosis-only without adenomyosis — exclusion fires (re-route to Section A criteria).",
+        "not_met": "Adenomyosis is documented as the primary indication.",
+        "unclear": "Both adenomyosis and endometriosis documented; clarification needed on primary indication.",
+        "not_documented": "Diagnoses not addressed in records."
+      }
+    }
+  ],
+
+  "metadata": {
+    "authored_by": "PA Prototype PA Prototype",
+    "authored_at": "2026-05-23",
+    "review_status": "prototype-validated",
+    "test_cases": ["L3-ADN-C1", "L3-ADN-C2", "L3-ADN-C3"],
+    "notes": "Models Section B (adenomyosis) of Oregon Guideline Note 39. Section A (endometriosis) would be authored as a sibling policy or branch."
+  }
+}

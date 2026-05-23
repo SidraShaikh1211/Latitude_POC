@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     data_dir: Path = PROJECT_ROOT / "data"
     log_level: str = "INFO"
 
+    # Where the doctor flow POSTs the assembled Bundle to hand off to the
+    # payer. Defaults to localhost — both halves run in one process for the
+    # prototype, but the handoff is a real HTTP call so the A2A boundary
+    # exists in the wire trace.
+    payer_pas_base_url: str = "http://127.0.0.1:8000"
+
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",

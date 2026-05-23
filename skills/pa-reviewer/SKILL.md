@@ -63,15 +63,22 @@ Return a structured `ReviewerOutput` via the `return_revieweroutput` tool. Schem
 }
 ```
 
-## Examples (the Smith case is the keystone)
+## Example (synthetic — illustrates style, not any real case)
 
-**Smith outcome: pend**, root verdict `unclear` because:
-- Conservative therapy: PT was planned but documented as "too painful to start" — verdict `unclear`.
-- Exclusion myofascial pain: M79.18 appears in visit diagnoses alongside M54.16 — verdict `unclear`.
+The example below uses a synthetic case (right total knee arthroplasty,
+adjudicator returned `unclear` on two criteria) to show the expected tone
+and structure. Do not copy the criterion IDs, missing-info wording, or
+narrative phrasings into a real case — generate them from the verdicts and
+evidence the adjudicator actually returned for the case you are reviewing.
+
+**Hypothetical setup — adjudicator returns:**
+- BMI-threshold leaf: `unclear` (intake noted "BMI ~38" from a nursing-flow row, but no Observation with a numeric BMI value or measurement date was extracted).
+- Conservative-therapy leaf: `unclear` (NSAIDs documented, but no documentation of duration of physical therapy or intra-articular injections).
+- All other leaves: `met`.
 
 **Acceptable narrative:**
 
-> The submission meets eligibility (age 50, lumbar radiculopathy supported by M54.16 and exam findings on the H&P from 2026-02-06) and severity (NRS 9/10 with documented functional limitation). However, conservative therapy is incomplete: while NSAIDs (ibuprofen) and acetaminophen are documented and a PT plan was prescribed (20 visits over 10 weeks), the PT eval notes the patient was "too painful to start," and there is no documentation of completed sessions or an imaging-correlation rationale for foregoing PT. Separately, visit diagnoses include M79.18 (other myalgia) alongside the M54.16 primary diagnosis, and Molina Policy 032 lists myofascial pain syndrome as an exclusion. Recommend pending the case for two specific data points.
+> The submission supports the indication (right knee primary osteoarthritis, M17.11, with imaging on the orthopedic note dated 2026-05-04) and the requested approach (CPT 27447). Two gaps remain. First, the policy's BMI criterion requires an Observation with a numeric value and measurement date; the chart references a BMI "around 38" in a nursing-flow row but no quantified Observation with a date was extracted. Second, conservative-therapy duration is not established — NSAIDs are documented but the chart does not state how long the patient trialed physical therapy or whether intra-articular corticosteroid injections were attempted before surgical referral. Pending the case for these two data points.
 
 **Acceptable missing_info:**
 
@@ -79,13 +86,13 @@ Return a structured `ReviewerOutput` via the `return_revieweroutput` tool. Schem
 [
   {
     "id": "MI1",
-    "criterion_id": "indication.initial_injection.conservative_therapy",
-    "request": "Document either (a) completion of physical therapy for ≥4 weeks at 3–4 sessions/week with attendance log, or (b) imaging correlation findings and the clinical rationale for why physical therapy is contraindicated for this patient."
+    "criterion_id": "eligibility.bmi",
+    "request": "Provide a dated BMI Observation with the numeric value and measurement date (or attach the vitals page documenting it)."
   },
   {
     "id": "MI2",
-    "criterion_id": "exclusion:X2",
-    "request": "Confirm the primary indication for the requested injection is lumbar radicular pain (ICD-10 M54.16) and not myofascial pain syndrome (M79.18). If M79.18 is incidental, state that explicitly."
+    "criterion_id": "indication.conservative_therapy",
+    "request": "Confirm the duration of physical therapy (start date, end date, sessions per week) and whether intra-articular corticosteroid or hyaluronic-acid injections were trialed."
   }
 ]
 ```

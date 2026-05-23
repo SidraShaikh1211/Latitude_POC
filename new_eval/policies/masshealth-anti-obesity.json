@@ -1,0 +1,500 @@
+{
+  "policy_id": "masshealth-anti-obesity-zepbound",
+  "name": "MassHealth Anti-Obesity Agents — Tirzepatide (Zepbound) PA Criteria",
+  "payer_id": "masshealth",
+  "version": "2025-01-01",
+  "effective_from": "2025-01-01",
+  "effective_until": null,
+
+  "source": {
+    "pdf_path": "policies/sources/masshealth-anti-obesity.pdf",
+    "total_pages": 16,
+    "publication_url": null,
+    "authority": "Commonwealth of Massachusetts — MassHealth"
+  },
+
+  "applies_to": {
+    "cpt_codes": ["J3490", "tirzepatide", "Zepbound", "tirzepatide-zepbound"],
+    "hcpcs_codes": ["J3490"],
+    "icd10_patterns": ["E66.*", "E66.01", "E66.09", "E66.3", "E66.9", "G47.33", "Z68.3*", "Z68.4*"],
+    "lines_of_business": ["medicaid"],
+    "states": ["MA"],
+    "age_min": 18,
+    "age_max": null,
+    "settings_of_care": ["outpatient", "office", "home"],
+    "request_categories": ["pharmacy"],
+    "branches": {
+      "initial": "Initial prior authorization for tirzepatide-Zepbound for obesity, overweight, or moderate-severe OSA with obesity",
+      "recertification": "Renewal of approved Zepbound therapy (separate criteria — not modeled in this version)"
+    }
+  },
+
+  "criteria": {
+    "id": "root",
+    "type": "internal",
+    "operator": "ALL",
+    "description": "Medical necessity criteria for tirzepatide-Zepbound: eligibility AND baseline documentation AND (conditional Mounjaro comparison) AND phentermine step-therapy satisfaction AND BMI-based indication.",
+    "policy_citation": {
+      "page": 13,
+      "section": "Zepbound — Initial Authorization",
+      "quote": "Documentation of the following is required for obesity, overweight, or moderate to severe obstructive sleep apnea (OSA) with obesity"
+    },
+    "children": [
+
+      {
+        "id": "eligibility",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Patient eligibility (age and qualifying diagnosis).",
+        "children": [
+          {
+            "id": "eligibility.age_18_plus",
+            "type": "leaf",
+            "description": "Member is 18 years of age or older.",
+            "policy_citation": {
+              "page": 13,
+              "section": "Zepbound — Initial Authorization",
+              "quote": "member is ≥ 18 years of age"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Patient"],
+              "extraction_hints": "Compute age from Patient.birthDate at the date of the PA request.",
+              "value_constraints": { "age_min": 18 },
+              "evaluator_kind": "numeric_threshold"
+            },
+            "verdict_rubric": {
+              "met": "Member's age at request date is ≥18 years.",
+              "not_met": "Member's age at request date is <18 years (Zepbound branch does not apply; Wegovy pediatric branch may).",
+              "unclear": "Patient.birthDate present but request date ambiguous.",
+              "not_documented": "Patient.birthDate not present."
+            }
+          },
+          {
+            "id": "eligibility.appropriate_diagnosis",
+            "type": "leaf",
+            "description": "Appropriate diagnosis: obesity (E66.0*/E66.9), overweight (E66.3), or moderate-severe OSA with obesity (G47.33 plus obesity).",
+            "policy_citation": {
+              "page": 13,
+              "section": "Zepbound — Initial Authorization",
+              "quote": "Documentation of the following is required for obesity, overweight, or moderate to severe obstructive sleep apnea (OSA) with obesity"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Condition"],
+              "extraction_hints": "Look for ICD-10 E66.0*, E66.9, E66.3, or G47.33 (moderate-to-severe OSA) accompanied by an obesity code. BMI Z68.3*/Z68.4* may also indicate obesity range.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "Qualifying ICD-10 diagnosis present on the problem list or visit diagnosis.",
+              "not_met": "No qualifying diagnosis; only off-label indications listed (e.g., insulin resistance alone).",
+              "unclear": "Narrative mentions 'weight loss' without coded diagnosis.",
+              "not_documented": "No diagnosis fields in available records."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "baseline_documentation",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Required baseline documentation items.",
+        "children": [
+          {
+            "id": "baseline_documentation.member_weight_dated_90_days",
+            "type": "leaf",
+            "description": "Member weight documented and dated within 90 days prior to initiation of pharmacotherapy for obesity.",
+            "policy_citation": {
+              "page": 13,
+              "section": "Zepbound — Initial Authorization",
+              "quote": "member weight (dated within the 90 days prior to initiation of pharmacotherapy for obesity"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation"],
+              "extraction_hints": "Find Observation with LOINC 29463-7 (body weight) or 39156-5 (BMI). Date must be within 90 days of the request date. The weight does NOT have to be measured for the requested agent specifically.",
+              "value_constraints": { "max_age_days": 90 },
+              "evaluator_kind": "llm_with_temporal_constraint"
+            },
+            "verdict_rubric": {
+              "met": "Weight Observation with date within 90 days of request.",
+              "not_met": "Weight documented but >90 days old.",
+              "unclear": "Weight present without explicit date.",
+              "not_documented": "No weight measurement in records."
+            }
+          },
+          {
+            "id": "baseline_documentation.counseled_diet_exercise",
+            "type": "leaf",
+            "description": "Member has been counseled to continue a reduced-calorie diet and increased physical activity.",
+            "policy_citation": {
+              "page": 13,
+              "section": "Zepbound — Initial Authorization",
+              "quote": "member has been counseled to continue reduced-calorie diet and increased physical activity"
+            },
+            "evaluation": {
+              "fact_types_needed": ["ClinicalImpression", "Procedure", "DocumentReference"],
+              "extraction_hints": "Look for explicit counseling notes referencing diet AND physical activity. Counseling is typically documented in the assessment/plan section of an office visit.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "Plan/assessment explicitly documents counseling on both reduced-calorie diet and increased activity.",
+              "not_met": "No counseling documentation found.",
+              "unclear": "Counseling mentioned for one (e.g., diet) but not both.",
+              "not_documented": "No relevant visit notes available."
+            }
+          },
+          {
+            "id": "baseline_documentation.requested_quantity_max",
+            "type": "leaf",
+            "description": "Requested quantity is ≤ four pens per 28 days.",
+            "policy_citation": {
+              "page": 13,
+              "section": "Zepbound — Initial Authorization",
+              "quote": "requested quantity is ≤ four pens/28 days"
+            },
+            "evaluation": {
+              "fact_types_needed": ["MedicationRequest"],
+              "extraction_hints": "Inspect MedicationRequest.dispenseRequest.quantity (count per 28 days). Convert if expressed differently (e.g., 1 pen/week = 4 pens/28 days).",
+              "value_constraints": { "max_pens_per_28_days": 4 },
+              "evaluator_kind": "numeric_threshold"
+            },
+            "verdict_rubric": {
+              "met": "Requested quantity is ≤4 pens per 28 days.",
+              "not_met": "Requested quantity exceeds 4 pens per 28 days.",
+              "unclear": "Quantity expressed in non-standard units; conversion ambiguous.",
+              "not_documented": "MedicationRequest has no quantity specified."
+            }
+          },
+          {
+            "id": "baseline_documentation.not_in_combination_glp1",
+            "type": "leaf",
+            "description": "Requested agent will not be used in combination with another GLP-1 receptor agonist.",
+            "policy_citation": {
+              "page": 13,
+              "section": "Zepbound — Initial Authorization",
+              "quote": "requested agent will not be used in combination with another GLP-1 receptor agonist"
+            },
+            "evaluation": {
+              "fact_types_needed": ["MedicationRequest", "MedicationStatement"],
+              "extraction_hints": "Scan active medication list for other GLP-1/GIP agonists: semaglutide (Ozempic, Wegovy, Rybelsus), liraglutide (Victoza, Saxenda), dulaglutide (Trulicity), exenatide (Byetta, Bydureon), tirzepatide (Mounjaro). Active concurrent use is disqualifying.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "No other GLP-1 agonist in active medication list.",
+              "not_met": "Another GLP-1 agonist is documented as active concurrent use.",
+              "unclear": "GLP-1 agonist on med list but status (active vs. discontinued) ambiguous.",
+              "not_documented": "Medication list not provided."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "mounjaro_comparison_if_t2dm",
+        "type": "leaf",
+        "description": "Conditional: if member has T2DM or prediabetes, documentation of medical necessity for Zepbound instead of Mounjaro is required.",
+        "policy_citation": {
+          "page": 13,
+          "section": "Zepbound — Initial Authorization",
+          "quote": "for members with a comorbid condition of type 2 diabetes mellitus or prediabetes, medical necessity for use of the requested agent instead of Mounjaro"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Condition", "ClinicalImpression", "DocumentReference"],
+          "extraction_hints": "If Condition list contains E11.* (T2DM) or R73.* (prediabetes), look for an explicit clinician narrative justifying Zepbound over Mounjaro. If no T2DM/prediabetes documented, this criterion is automatically met (conditional applicability).",
+          "value_constraints": {},
+          "evaluator_kind": "conditional_documentation"
+        },
+        "verdict_rubric": {
+          "met": "No T2DM/prediabetes on problem list (criterion not applicable); OR T2DM/prediabetes present AND clinician documented medical necessity for Zepbound over Mounjaro.",
+          "not_met": "T2DM/prediabetes documented but no medical-necessity rationale provided for choosing Zepbound over Mounjaro.",
+          "unclear": "T2DM/prediabetes present; rationale narrative present but vague or generic.",
+          "not_documented": "T2DM/prediabetes present but no notes addressing agent choice."
+        }
+      },
+
+      {
+        "id": "phentermine_step_therapy",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "Phentermine step-therapy requirement: ONE of (inadequate response after adequate trial) OR (documented adverse reaction) OR (documented contraindication).",
+        "policy_citation": {
+          "page": 13,
+          "section": "Zepbound — Initial Authorization (step-therapy)",
+          "quote": "inadequate response to phentermine with or without topiramate"
+        },
+        "children": [
+          {
+            "id": "phentermine_step_therapy.inadequate_response",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "Inadequate response to phentermine: ALL of adherence, response-inadequacy, and BMI ≥27.",
+            "children": [
+              {
+                "id": "phentermine_step_therapy.inadequate_response.adherent_90_of_120",
+                "type": "leaf",
+                "description": "Member is adherent to phentermine, defined as ≥ 90 of the last 120 days covered by pharmacy claims or equivalent documentation.",
+                "policy_citation": {
+                  "page": 13,
+                  "section": "Zepbound — Step-Therapy Adherence",
+                  "quote": "member is adherent to phentermine (defined as ≥ 90 out of the last 120 days)"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["MedicationStatement", "MedicationDispense", "ClaimHistory"],
+                  "extraction_hints": "Compute days-of-supply coverage from pharmacy claims for phentermine in the 120-day window prior to the Zepbound request. Adherence threshold: ≥90 days covered.",
+                  "value_constraints": { "min_covered_days": 90, "window_days": 120 },
+                  "evaluator_kind": "temporal_coverage"
+                },
+                "verdict_rubric": {
+                  "met": "Pharmacy claims show ≥90 days covered out of the last 120 days.",
+                  "not_met": "Pharmacy claims show <90 days covered out of the last 120 days.",
+                  "unclear": "Phentermine documented but pharmacy claims dates incomplete.",
+                  "not_documented": "No phentermine fills or claims found."
+                }
+              },
+              {
+                "id": "phentermine_step_therapy.inadequate_response.response_inadequate",
+                "type": "internal",
+                "operator": "ONE_OF",
+                "description": "Inadequate clinical response: either insufficient (<5% reduction at 3+ months) OR plateau (no weight loss for 3+ months).",
+                "children": [
+                  {
+                    "id": "phentermine_step_therapy.inadequate_response.response_inadequate.insufficient",
+                    "type": "leaf",
+                    "description": "Insufficient response: <5% reduction in body weight from baseline despite ≥3 months at maximally tolerated dose.",
+                    "policy_citation": {
+                      "page": 13,
+                      "section": "Zepbound — Step-Therapy Inadequacy Definition",
+                      "quote": "insufficient clinical response defined as < 5% reduction in body weight from baseline despite initial trial of ≥ three months of treatment with the maximally tolerated dose of phentermine"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Observation"],
+                      "extraction_hints": "Compute (baseline_weight - current_weight)/baseline_weight × 100. Trigger if <5% AND at least 3 months at max-tolerated dose.",
+                      "value_constraints": { "max_pct_reduction": 5, "min_treatment_months": 3 },
+                      "evaluator_kind": "computed_threshold"
+                    },
+                    "verdict_rubric": {
+                      "met": "<5% reduction documented after ≥3 months at max-tolerated dose.",
+                      "not_met": "≥5% reduction achieved.",
+                      "unclear": "Reduction documented but trial duration <3 months OR baseline weight unknown.",
+                      "not_documented": "Weights not in records."
+                    }
+                  },
+                  {
+                    "id": "phentermine_step_therapy.inadequate_response.response_inadequate.plateau",
+                    "type": "leaf",
+                    "description": "Plateaued response: no weight loss for at least 3 months at maximally tolerated dose of phentermine.",
+                    "policy_citation": {
+                      "page": 13,
+                      "section": "Zepbound — Step-Therapy Inadequacy Definition",
+                      "quote": "plateaued clinical response defined as no weight loss for at least"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Observation"],
+                      "extraction_hints": "Look for a stretch of ≥3 months at max-tolerated dose during which serial weights show no net loss (within measurement noise of ±1 kg). Continuation from earlier loss followed by 3-month flat is sufficient.",
+                      "value_constraints": { "plateau_min_months": 3 },
+                      "evaluator_kind": "trend_analysis"
+                    },
+                    "verdict_rubric": {
+                      "met": "Serial weights show ≥3 months of no net loss at max-tolerated dose.",
+                      "not_met": "Weight continues to decrease, or insufficient time at dose.",
+                      "unclear": "Few data points; trend ambiguous.",
+                      "not_documented": "No serial weights available."
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "phentermine_step_therapy.inadequate_response.current_bmi_27",
+                "type": "leaf",
+                "description": "Member's current BMI is ≥ 27 kg/m², dated within 90 days prior to treatment initiation of requested agent.",
+                "policy_citation": {
+                  "page": 14,
+                  "section": "Zepbound — Step-Therapy BMI Floor",
+                  "quote": "member’s current BMI is ≥ 27 kg/m2"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Observation"],
+                  "extraction_hints": "BMI Observation (LOINC 39156-5) dated within 90 days of request, value ≥27. Use latest qualifying value.",
+                  "value_constraints": { "min_bmi": 27, "max_age_days": 90 },
+                  "evaluator_kind": "numeric_threshold"
+                },
+                "verdict_rubric": {
+                  "met": "Recent (≤90d) BMI ≥27.",
+                  "not_met": "Recent BMI <27.",
+                  "unclear": "BMI value present without date.",
+                  "not_documented": "No BMI Observation found."
+                }
+              }
+            ]
+          },
+          {
+            "id": "phentermine_step_therapy.adverse_reaction",
+            "type": "leaf",
+            "description": "Medical records document an adverse reaction to phentermine that is allergic in nature or cannot be expected/managed as part of weight-loss therapy.",
+            "policy_citation": {
+              "page": 14,
+              "section": "Zepbound — Step-Therapy Adverse Reaction Alternative",
+              "quote": "medical records documenting adverse reaction to phentermine that is allergic in nature or cannot be expected or managed as part of weight loss therapy"
+            },
+            "evaluation": {
+              "fact_types_needed": ["AllergyIntolerance", "AdverseEvent", "ClinicalImpression"],
+              "extraction_hints": "AllergyIntolerance with substance phentermine, or AdverseEvent referencing phentermine, or narrative documenting a reaction that wasn't a manageable side-effect.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "Explicit allergic or non-tolerable reaction to phentermine documented.",
+              "not_met": "Side effects documented but routine and manageable (e.g., transient dry mouth, mild insomnia).",
+              "unclear": "Patient self-discontinued without explicit AE classification.",
+              "not_documented": "No reaction history."
+            }
+          },
+          {
+            "id": "phentermine_step_therapy.contraindication",
+            "type": "leaf",
+            "description": "Medical records document a contraindication to phentermine.",
+            "policy_citation": {
+              "page": 14,
+              "section": "Zepbound — Step-Therapy Contraindication Alternative",
+              "quote": "medical records documenting contraindication to phentermine"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Condition", "AllergyIntolerance", "ClinicalImpression"],
+              "extraction_hints": "Acceptable contraindications include (per MassHealth phentermine policy): arrhythmia, CAD, CHF, MI history, stroke history, uncontrolled HTN, hyperthyroidism, glaucoma, history of psychosis, bipolar with mania, MAOI concomitant use, pregnancy/lactation, severe renal disease, SUD/OUD/AUD/SUD.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "Member has a documented condition from the acceptable phentermine-contraindication list.",
+              "not_met": "Member has none of the listed contraindications.",
+              "unclear": "Condition documented but mapping to contraindication list ambiguous (e.g., 'mild HTN').",
+              "not_documented": "No condition history provided."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "bmi_indication",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "BMI-based qualification: either BMI ≥30 alone, OR BMI ≥27 plus a weight-related comorbidity.",
+        "children": [
+          {
+            "id": "bmi_indication.bmi_30_or_above",
+            "type": "leaf",
+            "description": "Member BMI is ≥ 30 kg/m², dated within 90 days prior to initiation.",
+            "policy_citation": {
+              "page": 14,
+              "section": "Zepbound — BMI Qualifying Threshold",
+              "quote": "member BMI is ≥ 30 kg/m2"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation"],
+              "extraction_hints": "BMI Observation (LOINC 39156-5) ≥30 dated within 90 days. Does not have to be measured for the requested agent.",
+              "value_constraints": { "min_bmi": 30, "max_age_days": 90 },
+              "evaluator_kind": "numeric_threshold"
+            },
+            "verdict_rubric": {
+              "met": "Recent (≤90d) BMI ≥30.",
+              "not_met": "Recent BMI <30 (member would need to qualify via BMI≥27 + comorbidity path).",
+              "unclear": "BMI value present but date unclear.",
+              "not_documented": "No BMI Observation found."
+            }
+          },
+          {
+            "id": "bmi_indication.bmi_27_with_comorbidity",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "BMI ≥ 27 kg/m² PLUS at least one weight-related comorbid condition.",
+            "children": [
+              {
+                "id": "bmi_indication.bmi_27_with_comorbidity.bmi_27",
+                "type": "leaf",
+                "description": "Member BMI is ≥ 27 kg/m², dated within 90 days prior to initiation.",
+                "policy_citation": {
+                  "page": 14,
+                  "section": "Zepbound — BMI Qualifying Threshold (Comorbidity Path)",
+                  "quote": "member BMI is ≥ 27 kg/m2"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Observation"],
+                  "extraction_hints": "BMI ≥27 dated within 90 days.",
+                  "value_constraints": { "min_bmi": 27, "max_age_days": 90 },
+                  "evaluator_kind": "numeric_threshold"
+                },
+                "verdict_rubric": {
+                  "met": "BMI ≥27 within 90 days.",
+                  "not_met": "BMI <27.",
+                  "unclear": "BMI present but date unclear.",
+                  "not_documented": "No BMI Observation."
+                }
+              },
+              {
+                "id": "bmi_indication.bmi_27_with_comorbidity.one_comorbidity",
+                "type": "leaf",
+                "description": "At least one of the listed weight-related comorbid conditions present: coronary heart disease or other atherosclerotic disease, dyslipidemia, hypertension, NASH, obstructive sleep apnea, polycystic ovarian syndrome, prediabetes, systemic osteoarthritis, or type 2 diabetes mellitus.",
+                "policy_citation": {
+                  "page": 14,
+                  "section": "Zepbound — Weight-Related Comorbidities List",
+                  "quote": "one of the following weight-related comorbid conditions"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Condition"],
+                  "extraction_hints": "Map ICD-10 codes: CHD/atherosclerosis I20-I25; dyslipidemia E78.*; HTN I10-I11; NASH K75.81; OSA G47.33; PCOS E28.2; prediabetes R73.0*; osteoarthritis M15-M19; T2DM E11.*.",
+                  "value_constraints": {},
+                  "evaluator_kind": "llm_class_membership"
+                },
+                "verdict_rubric": {
+                  "met": "At least one qualifying comorbidity present.",
+                  "not_met": "No qualifying comorbidity in problem list.",
+                  "unclear": "Comorbidity mentioned in narrative but not coded; mapping ambiguous.",
+                  "not_documented": "No problem list available."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+
+  "exclusions": [
+    {
+      "id": "X1",
+      "description": "Concurrent use of another GLP-1 receptor agonist (covered as a leaf requirement; surfaced separately as an exclusion for short-circuit denial).",
+      "policy_citation": {
+        "page": 13,
+        "section": "Zepbound — Initial Authorization (combination restriction)",
+        "quote": "requested agent will not be used in combination with another GLP-1 receptor agonist"
+      },
+      "evaluation": {
+        "fact_types_needed": ["MedicationRequest", "MedicationStatement"],
+        "extraction_hints": "If active GLP-1 prescription (semaglutide, liraglutide, dulaglutide, exenatide, tirzepatide-Mounjaro) is present concurrently, exclusion fires.",
+        "evaluator_kind": "llm_class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Active concurrent GLP-1 documented — exclusion fires (deny).",
+        "not_met": "No concurrent GLP-1 use.",
+        "unclear": "Status of listed agent ambiguous.",
+        "not_documented": "Medication list not available."
+      }
+    }
+  ],
+
+  "metadata": {
+    "authored_by": "PA Prototype PA Prototype",
+    "authored_at": "2026-05-23",
+    "review_status": "prototype-validated",
+    "test_cases": ["L3-ZEP-B1", "L3-ZEP-B2", "L3-ZEP-B3", "L3-ZEP-B4"],
+    "notes": "Models the Zepbound-for-obesity branch of MassHealth Anti-Obesity Agents policy. Wegovy pediatric, Wegovy cardiovascular, and Wegovy NASH branches are intentionally out of scope for this version and would be modeled as sibling policies or branches.",
+    "scope_cuts": [
+      "Wegovy pediatric branch (12 to <18, BMI 95th percentile)",
+      "Wegovy cardiovascular branch (CV protection in established CVD, no DM)",
+      "Wegovy NASH branch (liver biopsy or NIT, GE/hepatology prescriber)",
+      "Recertification criteria for any agent"
+    ]
+  }
+}

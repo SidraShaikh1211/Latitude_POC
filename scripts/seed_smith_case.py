@@ -84,7 +84,7 @@ async def _seed(pdf_path: Path, case_id: str) -> None:
     print(f"  outcome:        {run.determination.outcome if run.determination else '?'}")
     if run.reviewer:
         print(f"  missing_info:   {len(run.reviewer.output.missing_info)} requests")
-    print(f"\nCase persisted to SQLite. View in Streamlit at http://localhost:8501")
+    print(f"\nCase persisted to SQLite. View in the React UI at http://localhost:5173")
 
 
 def main() -> None:

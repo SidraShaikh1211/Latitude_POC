@@ -1,21 +1,22 @@
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 UVICORN := .venv/bin/uvicorn
-STREAMLIT := .venv/bin/streamlit
 PYTEST := .venv/bin/pytest
 
-.PHONY: help install seed run ui mcp test eval clean
+.PHONY: help install seed run ui ui-install ui-build mcp test eval clean
 
 help:
 	@echo "Targets:"
-	@echo "  install   Install dependencies into .venv"
-	@echo "  seed      Seed Smith case (build Bundle, ingest, write to DB)"
-	@echo "  run       Start FastAPI on :8000"
-	@echo "  ui        Start Streamlit on :8501"
-	@echo "  mcp       Start MCP server (stdio mode)"
-	@echo "  test      Run unit + integration tests"
-	@echo "  eval      Run full eval pyramid (L0 + L1 + L2 + L3)"
-	@echo "  clean     Remove caches and the local DB"
+	@echo "  install      Install Python dependencies into .venv"
+	@echo "  seed         Seed Smith case (build Bundle, ingest, write to DB)"
+	@echo "  run          Start FastAPI on :8000"
+	@echo "  ui-install   npm install in frontend-react/ (one-time)"
+	@echo "  ui           Start the React UI (Vite dev server) on :5173"
+	@echo "  ui-build     Production build of the React UI"
+	@echo "  mcp          Start MCP server (stdio mode)"
+	@echo "  test         Run unit + integration tests"
+	@echo "  eval         Run full eval pyramid (L0 + L1 + L2 + L3)"
+	@echo "  clean        Remove caches and the local DB"
 
 install:
 	$(PIP) install -r requirements.txt
@@ -26,8 +27,14 @@ seed:
 run:
 	$(UVICORN) app.main:app --reload --host 0.0.0.0 --port 8000
 
+ui-install:
+	cd frontend-react && npm install
+
 ui:
-	$(STREAMLIT) run frontend/app.py --server.port 8501
+	cd frontend-react && npm run dev
+
+ui-build:
+	cd frontend-react && npm run build
 
 mcp:
 	$(PY) -m app.mcp_server.server

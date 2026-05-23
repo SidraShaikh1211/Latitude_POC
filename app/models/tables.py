@@ -81,6 +81,46 @@ class VerdictRecord(Base):
     case: Mapped["Case"] = relationship(back_populates="verdicts")
 
 
+class Submission(Base):
+    """Doctor-side submission state — separate from `Case` (payer side).
+
+    Lifecycle:
+        extracting_metadata → bundle_ready → sending → sent
+                                                     ↘ failed
+
+    A `Submission` becomes `sent` once the doctor's bundle has been handed
+    off to the payer via POST /fhir/Claim/$submit. At that point
+    `payer_case_id` is populated and the doctor UI switches to polling the
+    Case row for the rest of the pipeline.
+    """
+
+    __tablename__ = "submissions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    pdf_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
+    extracted_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    extraction_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_cost_usd: Mapped[float | None] = mapped_column(nullable=True)
+    inbound_bundle: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    bundle_entry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bundle_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    patient_display: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    cpt_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    payer_case_id: Mapped[str | None] = mapped_column(
+        ForeignKey("cases.id"), nullable=True, index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
