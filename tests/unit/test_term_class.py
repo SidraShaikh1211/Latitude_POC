@@ -96,3 +96,77 @@ def test_therapy_cpt_recognized():
     assert is_therapy_cpt("97110")
     assert is_therapy_cpt("97140")
     assert not is_therapy_cpt("99213")
+
+
+# --- Gyn / hormonal therapy class tests ---
+
+def test_mirena_is_progesterone_iud():
+    r = lookup_medication_class("Mirena", "progesterone_iud")
+    assert r.in_class
+    assert r.source == "dictionary"
+
+
+def test_mirena_is_hormonal_therapy_umbrella():
+    r = lookup_medication_class("Mirena", "hormonal_therapy")
+    assert r.in_class
+
+
+def test_dmpa_is_injectable_hormone():
+    r = lookup_medication_class("DMPA", "injectable_hormone")
+    assert r.in_class
+    assert lookup_medication_class("Depo-Provera", "injectable_hormone").in_class
+    assert lookup_medication_class("medroxyprogesterone acetate", "injectable_hormone").in_class
+
+
+def test_leuprolide_is_gnrh_analog():
+    r = lookup_medication_class("leuprolide", "gnrh_analog")
+    assert r.in_class
+    assert lookup_medication_class("Lupron", "gnrh_analog").in_class
+    assert lookup_medication_class("goserelin", "gnrh_analog").in_class
+
+
+def test_danazol_is_gnrh_analog():
+    # danazol is grouped with GnRH analogs in the policy ("agents for inducing amenorrhea")
+    assert lookup_medication_class("danazol", "gnrh_analog").in_class
+
+
+def test_ocp_is_oral_contraceptive():
+    assert lookup_medication_class("Yaz", "oral_contraceptive").in_class
+    assert lookup_medication_class("Lo Loestrin", "oral_contraceptive").in_class
+    assert lookup_medication_class("ethinyl estradiol", "oral_contraceptive").in_class
+    assert lookup_medication_class("OCP", "oral_contraceptive").in_class
+
+
+def test_ibuprofen_is_not_hormonal():
+    r = lookup_medication_class("ibuprofen", "hormonal_therapy")
+    # ibuprofen is NSAID, not hormonal — but unknown to the dictionary returns "unknown",
+    # which we expect since ibuprofen isn't in any hormonal subclass
+    assert not r.in_class
+
+
+def test_n8003_is_adenomyosis():
+    r = lookup_icd10_class("N80.03", "adenomyosis")
+    assert r.in_class
+    assert r.source == "dictionary"
+
+
+def test_n80_family_is_endometriosis():
+    assert lookup_icd10_class("N80.0", "endometriosis").in_class
+    assert lookup_icd10_class("N80.1", "endometriosis").in_class
+    assert lookup_icd10_class("N80.9", "endometriosis").in_class
+
+
+def test_n946_is_dysmenorrhea():
+    assert lookup_icd10_class("N94.6", "dysmenorrhea").in_class
+
+
+def test_n92_family_is_abnormal_uterine_bleeding():
+    assert lookup_icd10_class("N92.0", "abnormal_uterine_bleeding").in_class
+    assert lookup_icd10_class("N93.8", "abnormal_uterine_bleeding").in_class
+    assert lookup_icd10_class("N91.5", "abnormal_uterine_bleeding").in_class
+
+
+def test_classify_icd10_includes_gyn_groupings():
+    hits = classify_icd10("N80.03")
+    assert "endometriosis" in hits
+    assert "adenomyosis" in hits

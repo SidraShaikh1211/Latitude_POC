@@ -134,36 +134,58 @@ async def run_level2() -> dict:
 # ---------------------------------------------------------------------------
 
 async def run_level3() -> dict:
-    """Run E3-E01 (Smith keystone) and any other authored E2E cases."""
-    import json
+    """Run E2E cases via the real PDF→extractor→bundle→pipeline path.
+
+    Each case is a PDF on disk; the metadata extractor pulls submission
+    fields at runtime (no pre-baked fixtures)."""
+    from app.extraction.metadata import extract_submission_metadata
+    from app.extraction.pdf import extract_pdf
     from app.orchestrator import evaluate_pa_case
+    from app.pas.bundle_constructor import build_pas_bundle
 
     cases = [
-        {"id": "E01-smith", "fixture": "tests/fixtures/smith_claim_bundle.json",
-         "expected_outcome": "pend"},
+        {
+            "id": "E01-smith",
+            "pdf": "clinical_pdfs/David_Smith_Clinical.pdf",
+            "expected_outcome": "pend",
+            "expected_policy": "molina-mcp-032",
+        },
     ]
     passes = 0
     failures = []
     total_cost = 0.0
     for c in cases:
-        bundle_path = PROJECT_ROOT / c["fixture"]
-        if not bundle_path.exists():
-            failures.append((c["id"], "fixture missing"))
+        pdf_path = PROJECT_ROOT / c["pdf"]
+        if not pdf_path.exists():
+            failures.append((c["id"], f"pdf missing: {c['pdf']}"))
             continue
-        bundle = json.loads(bundle_path.read_text())
         try:
-            run = await evaluate_pa_case(bundle, run_intake_on_documents=True, case_id=f"L3-{c['id']}")
+            doc = extract_pdf(pdf_path, document_id=f"L3-{c['id']}-doc")
+            pdf_bytes = pdf_path.read_bytes()
+            # Metadata extraction (LLM)
+            meta = await extract_submission_metadata(
+                doc, pdf_bytes=pdf_bytes, pdf_filename=pdf_path.name,
+            )
+            total_cost += meta.usage.cost_usd
+            bundle, _ = build_pas_bundle(meta.submission, case_id=f"L3-{c['id']}")
+            run = await evaluate_pa_case(
+                bundle, run_intake_on_documents=True, case_id=f"L3-{c['id']}",
+            )
             if run.adjudication:
                 total_cost += run.adjudication.total_usage.cost_usd
             if run.intake:
                 total_cost += run.intake.usage.cost_usd
             actual = run.determination.outcome if run.determination else None
-            if actual == c["expected_outcome"]:
+            policy_ok = (
+                c.get("expected_policy") is None
+                or run.selection.selected_policy_id == c["expected_policy"]
+            )
+            if actual == c["expected_outcome"] and policy_ok:
                 passes += 1
-                print(f"  ✓ {c['id']}: outcome={actual} cost=${total_cost:.4f}")
+                print(f"  ✓ {c['id']}: outcome={actual} policy={run.selection.selected_policy_id} cost=${total_cost:.4f}")
             else:
-                failures.append((c["id"], f"expected {c['expected_outcome']} got {actual}"))
-                print(f"  ✗ {c['id']}: expected {c['expected_outcome']} got {actual}")
+                failures.append((c["id"], f"expected {c['expected_outcome']} got {actual}; policy={run.selection.selected_policy_id}"))
+                print(f"  ✗ {c['id']}: expected {c['expected_outcome']} got {actual} (policy={run.selection.selected_policy_id})")
         except Exception as e:
             failures.append((c["id"], str(e)))
             print(f"  ! {c['id']}: {e}")

@@ -1,52 +1,77 @@
-"""Construct the David Smith Da Vinci PAS Claim Bundle and (optionally) run
-the end-to-end pipeline.
+"""Seed the David Smith case through the REAL doctor flow.
 
-This script is the SOURCE OF TRUTH for the Smith fixture
-(tests/fixtures/smith_claim_bundle.json). Re-run any time the input PDF or
-metadata changes. The bundle-building logic lives in
-`app/pas/bundle_constructor.py` so the same builders are reused by the
-doctor-submit REST endpoint.
+Reads `clinical_pdfs/David_Smith_Clinical.pdf`, runs the metadata
+extractor on it (just like POST /v1/doctor/submit does), assembles the
+Bundle from extracted metadata, runs the full payer pipeline, and
+persists the case to SQLite.
+
+No hardcoded Smith data anywhere. Same code path that a doctor's upload
+takes. This script exists so you can pre-populate the payer's inbox for
+demos without clicking through the UI.
 
 Usage:
-    .venv/bin/python -m scripts.seed_smith_case                  # fixture + e2e run
-    .venv/bin/python -m scripts.seed_smith_case --fixture-only   # just write the fixture
+    .venv/bin/python -m scripts.seed_smith_case
     .venv/bin/python -m scripts.seed_smith_case --case-id smith-001
+    .venv/bin/python -m scripts.seed_smith_case --pdf path/to/some.pdf
 """
 
 from __future__ import annotations
 
-import json
+import argparse
+import asyncio
+from pathlib import Path
 
-from app.pas.bundle_constructor import build_pas_bundle, smith_submission
-from app.settings import PROJECT_ROOT
-
-
-SMITH_PDF = PROJECT_ROOT / "clinical_pdfs" / "David_Smith_Clinical.pdf"
-FIXTURE_OUT = PROJECT_ROOT / "tests" / "fixtures" / "smith_claim_bundle.json"
+from app.settings import PROJECT_ROOT, settings
 
 
-def build_bundle(case_id: str = "smith-001") -> dict:
-    if not SMITH_PDF.exists():
-        raise FileNotFoundError(f"Smith PDF not found at {SMITH_PDF}")
-    pdf_bytes = SMITH_PDF.read_bytes()
-    submission = smith_submission(pdf_bytes)
-    bundle, _ = build_pas_bundle(submission, case_id=case_id)
-    return bundle
+DEFAULT_SMITH_PDF = PROJECT_ROOT / "clinical_pdfs" / "David_Smith_Clinical.pdf"
 
 
-async def _evaluate_and_persist(bundle: dict, case_id: str) -> None:
-    """Run the end-to-end pipeline on the Smith bundle and persist to SQLite.
-    Requires ANTHROPIC_API_KEY to be set."""
+async def _seed(pdf_path: Path, case_id: str) -> None:
+    """Run the doctor flow on a PDF and persist the resulting case."""
     from app.api.cases import _persist
     from app.db.engine import init_db
+    from app.extraction.metadata import extract_submission_metadata, missing_required_fields
+    from app.extraction.pdf import extract_pdf
     from app.orchestrator import evaluate_pa_case
+    from app.pas.bundle_constructor import build_pas_bundle
 
     await init_db()
-    print(f"\nRunning end-to-end pipeline on Smith case (this takes ~3-4 minutes)...")
+
+    print(f"\nReading PDF: {pdf_path.relative_to(PROJECT_ROOT)}")
+    pdf_bytes = pdf_path.read_bytes()
+    doc = extract_pdf(pdf_path, document_id=f"upload-{case_id}")
+    print(f"  PDF parsed: {doc.page_count} pages, {len(doc.full_text):,} chars")
+
+    print(f"\n→ Running metadata extractor (Claude) ...")
+    meta_result = await extract_submission_metadata(
+        doc, pdf_bytes=pdf_bytes, pdf_filename=pdf_path.name,
+    )
+    print(f"  Metadata extraction done  ·  cost ${meta_result.usage.cost_usd:.4f}")
+
+    sub = meta_result.submission
+    print(f"  Patient:  {sub.patient_given} {sub.patient_family}  ·  DOB {sub.patient_dob}")
+    print(f"  Coverage: {sub.payer_id} ({sub.payer_display})  ·  member {sub.member_id}")
+    print(f"  Service:  CPT {sub.cpt_code}  ·  DOS {sub.service_date}")
+    icd_strs = [f"{c.code} ({c.kind})" for c in sub.icd10_codes]
+    print(f"  ICD-10:   {', '.join(icd_strs)}")
+
+    missing = missing_required_fields(meta_result.metadata)
+    if missing:
+        print(f"\n✗ Metadata extraction missing required fields: {missing}")
+        print(f"  Extraction notes: {meta_result.notes}")
+        return
+
+    print(f"\n→ Building Da Vinci PAS Bundle ...")
+    bundle, _ = build_pas_bundle(sub, case_id=case_id)
+    print(f"  Bundle has {len(bundle['entry'])} entries")
+
+    print(f"\n→ Running payer pipeline (intake + selector + adjudicator + reviewer) ...")
+    print(f"  This takes ~3-4 minutes and costs ~$1-2 in API.")
     run = await evaluate_pa_case(bundle, run_intake_on_documents=True, case_id=case_id)
     await _persist(run)
 
-    print(f"\n=== SMITH CASE — END-TO-END RESULT ===")
+    print(f"\n=== END-TO-END RESULT ===")
     print(f"  case_id:        {run.case_id}")
     print(f"  selection:      {run.selection.status} → {run.selection.selected_policy_id} ({run.selection.branch})")
     if run.adjudication:
@@ -54,7 +79,7 @@ async def _evaluate_and_persist(bundle: dict, case_id: str) -> None:
         for v in run.adjudication.leaf_verdicts.values():
             v_counts[v.verdict] = v_counts.get(v.verdict, 0) + 1
         print(f"  leaf verdicts:  met={v_counts['met']}  not_met={v_counts['not_met']}  unclear={v_counts['unclear']}  not_documented={v_counts['not_documented']}")
-        print(f"  cost:           ${run.adjudication.total_usage.cost_usd:.4f}")
+        print(f"  pipeline cost:  ${run.adjudication.total_usage.cost_usd:.4f}")
         print(f"  cache_read:     {run.adjudication.total_usage.cache_read_tokens:,} tokens")
     print(f"  outcome:        {run.determination.outcome if run.determination else '?'}")
     if run.reviewer:
@@ -63,34 +88,26 @@ async def _evaluate_and_persist(bundle: dict, case_id: str) -> None:
 
 
 def main() -> None:
-    import argparse
-    parser = argparse.ArgumentParser(description="Seed the Smith case: build fixture + (optionally) run pipeline + persist.")
-    parser.add_argument("--fixture-only", action="store_true",
-                        help="Build the Smith Bundle JSON fixture only; skip the pipeline run.")
-    parser.add_argument("--case-id", default="smith-001", help="Case ID for persistence.")
+    parser = argparse.ArgumentParser(
+        description="Seed a case via the doctor flow: PDF → extractor → bundle → pipeline → persist.",
+    )
+    parser.add_argument("--pdf", default=str(DEFAULT_SMITH_PDF),
+                        help=f"Path to clinical PDF (default: {DEFAULT_SMITH_PDF.relative_to(PROJECT_ROOT)})")
+    parser.add_argument("--case-id", default="smith-001", help="Case ID for persistence")
     args = parser.parse_args()
 
-    FIXTURE_OUT.parent.mkdir(parents=True, exist_ok=True)
-    bundle = build_bundle(case_id=args.case_id)
-    FIXTURE_OUT.write_text(json.dumps(bundle, indent=2))
-    print(f"Wrote {FIXTURE_OUT.relative_to(PROJECT_ROOT)}")
-    print(f"  Bundle.entry count: {len(bundle['entry'])}")
-    print(f"  Claim.diagnosis count: {len(bundle['entry'][0]['resource']['diagnosis'])}")
-    print(f"  CPT: 62323  | DOS: 2026-04-08  | Payer: molina  | LOB: medicaid  | State: NY")
-    print(f"  Includes Smith PDF as DocumentReference + Binary (base64-encoded)")
+    pdf_path = Path(args.pdf).resolve()
+    if not pdf_path.exists():
+        raise SystemExit(f"PDF not found: {pdf_path}")
 
-    if args.fixture_only:
-        print("\n--fixture-only specified; skipping pipeline run.")
-        return
-
-    from app.settings import settings
     if not settings.anthropic_api_key:
-        print("\nANTHROPIC_API_KEY not set; skipping pipeline run.")
-        print("To run end-to-end:  export ANTHROPIC_API_KEY=sk-... && make seed")
-        return
+        raise SystemExit(
+            "ANTHROPIC_API_KEY not set.\n"
+            "  cp .env.example .env  and paste your key, OR\n"
+            "  export ANTHROPIC_API_KEY=sk-..."
+        )
 
-    import asyncio
-    asyncio.run(_evaluate_and_persist(bundle, args.case_id))
+    asyncio.run(_seed(pdf_path, args.case_id))
 
 
 if __name__ == "__main__":

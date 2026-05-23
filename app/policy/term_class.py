@@ -117,7 +117,65 @@ MEDICATION_CLASSES: dict[str, set[str]] = {
         "argatroban",
         "bivalirudin", "angiomax",
     },
+    # --- Gyn / hormonal therapy classes ---
+    "oral_contraceptive": {
+        # Generic / mono-component names
+        "ethinyl estradiol", "norethindrone", "drospirenone", "levonorgestrel",
+        "desogestrel", "norgestimate", "norgestrel",
+        # Common combination brand names
+        "yaz", "yasmin", "loestrin", "lo loestrin", "lo loestrin fe",
+        "ortho tri-cyclen", "ortho-cyclen", "ortho-novum",
+        "seasonale", "seasonique", "lybrel",
+        "alesse", "lutera", "aviane", "lessina",
+        "microgestin", "junel", "junel fe",
+        "minastrin", "minastrin 24 fe",
+        "tri-sprintec", "sprintec", "tri-nessa",
+        "natazia", "beyaz", "safyral",
+        "ocp", "ocps", "oral contraceptive", "oral contraceptive pill",
+        "combined oral contraceptive", "coc",
+        "progestin only pill", "pop", "norethindrone tablet",
+        # Patch
+        "ortho evra", "xulane", "twirla",
+        # Vaginal ring
+        "nuvaring", "annovera",
+    },
+    "progesterone_iud": {
+        "mirena", "skyla", "kyleena", "liletta",
+        "levonorgestrel iud", "levonorgestrel-releasing iud",
+        "progesterone iud", "progestin iud", "hormonal iud",
+        "iud", "intrauterine device",  # generic — context-dependent
+    },
+    "injectable_hormone": {
+        "depo-provera", "depo provera", "depoprovera",
+        "dmpa", "medroxyprogesterone acetate", "medroxyprogesterone",
+        "depo subq", "depo-subq provera 104",
+    },
+    "gnrh_analog": {
+        "leuprolide", "lupron", "lupron depot", "eligard",
+        "nafarelin", "synarel",
+        "goserelin", "zoladex",
+        "triptorelin", "trelstar",
+        "histrelin", "vantas", "supprelin la",
+        "danazol", "danocrine",
+        "elagolix", "orilissa", "oriahnn",
+        "relugolix", "myfembree",
+    },
+    # Umbrella: any of the above gyn hormonal classes
+    "hormonal_therapy": {
+        # Aggregated from oral_contraceptive + progesterone_iud + injectable_hormone + gnrh_analog
+        # Populated below via _AGGREGATE_HORMONAL_THERAPY for maintainability
+    },
 }
+
+
+# Build the hormonal_therapy umbrella set from the component classes
+_AGGREGATE_HORMONAL_THERAPY = (
+    MEDICATION_CLASSES["oral_contraceptive"]
+    | MEDICATION_CLASSES["progesterone_iud"]
+    | MEDICATION_CLASSES["injectable_hormone"]
+    | MEDICATION_CLASSES["gnrh_analog"]
+)
+MEDICATION_CLASSES["hormonal_therapy"] = _AGGREGATE_HORMONAL_THERAPY
 
 # Explicit non-members (key negatives the Smith case depends on)
 MEDICATION_NON_MEMBERS: dict[str, set[str]] = {
@@ -170,6 +228,24 @@ ICD10_CLASSES: dict[str, list[str]] = {
     ],
     "pregnancy": [
         "Z34.*", "Z33.*", "O09.*", "O0*",
+    ],
+    # --- Gyn ICD-10 groupings ---
+    "endometriosis": [
+        "N80.*",
+    ],
+    "adenomyosis": [
+        "N80.03",   # adenomyosis is now under the N80 family in ICD-10-CM updates
+        "N80.0*",
+    ],
+    "dysmenorrhea": [
+        "N94.6", "N94.4", "N94.5",  # primary/secondary/dysmenorrhea unspecified
+    ],
+    "abnormal_uterine_bleeding": [
+        "N92.*", "N93.*", "N91.*",  # excessive/irregular menstruation + amenorrhea family
+    ],
+    "postmenopausal_status": [
+        "Z78.0",     # asymptomatic menopausal state
+        "N95.1",     # menopausal and female climacteric states
     ],
 }
 

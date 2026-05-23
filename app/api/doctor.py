@@ -1,33 +1,46 @@
-"""Doctor-facing submission endpoint.
+"""Doctor-facing submission endpoint — PDF-only flow.
 
-POST /v1/doctor/submit (multipart) accepts:
-  - pdf: the patient's clinical PDF
-  - metadata: JSON-encoded SubmissionData fields (everything except pdf_bytes)
+POST /v1/doctor/submit accepts JUST the PDF:
+  - pdf: UploadFile (the patient's clinical PDF; that's the only input)
 
-It builds a Da Vinci PAS Bundle, creates a Case row with
-processing_stage="received", kicks off the pipeline in a background asyncio
-task, and returns {case_id, bundle_preview} immediately.
+Pipeline:
+  1. Read PDF bytes, extract per-page text (PyMuPDF, deterministic)
+  2. Run the metadata extractor (Claude) → SubmissionData (CPT, ICD-10, payer,
+     member ID, DOB inferred from clinical content)
+  3. Assemble Da Vinci PAS Bundle from the extracted SubmissionData
+  4. Persist Case w/ processing_stage="received"
+  5. Fire orchestrator in background (intake → selector → adjudicator → reviewer)
+  6. Return {case_id, extracted_metadata, bundle_preview} immediately
 
-The background task updates Case.processing_stage between pipeline steps so
-the doctor's Streamlit UI can poll GET /v1/cases/{case_id} every 2s and
-render live progress.
+The doctor doesn't fill any form fields. The metadata extractor does what
+an EHR would do automatically: pull patient demographics, insurance info,
+and the requested service (with CPT inference from clinical context) out of
+the chart.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 import uuid
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.api.cases import _persist, _update_case_stage
 from app.db.engine import session_scope
+from app.extraction.metadata import (
+    ExtractedMetadata,
+    MetadataResult,
+    extract_submission_metadata,
+    missing_required_fields,
+)
+from app.extraction.pdf import extract_pdf
 from app.models import Case
 from app.orchestrator import evaluate_pa_case
-from app.pas.bundle_constructor import ICD10Code, SubmissionData, build_pas_bundle
+from app.pas.bundle_constructor import SubmissionData, build_pas_bundle
 
 
 log = structlog.get_logger()
@@ -36,46 +49,79 @@ router = APIRouter(prefix="/v1/doctor", tags=["doctor"])
 
 
 # ---------------------------------------------------------------------------
-# Endpoint
+# Endpoint — PDF only
 # ---------------------------------------------------------------------------
 
 
 @router.post("/submit")
-async def doctor_submit(
-    pdf: UploadFile = File(...),
-    metadata: str = Form(...),
-) -> dict[str, Any]:
-    """Build a PAS Bundle from the upload + form, fire the pipeline in the
-    background, and return the case_id + Bundle preview immediately."""
-    # Parse and validate the metadata payload
-    try:
-        data = json.loads(metadata)
-    except json.JSONDecodeError as e:
-        raise HTTPException(400, f"metadata must be valid JSON: {e}") from e
+async def doctor_submit(pdf: UploadFile = File(...)) -> dict[str, Any]:
+    """Submit a clinical PDF for prior authorization.
 
+    The system reads the PDF, infers all needed fields (CPT, ICD-10, patient,
+    coverage), assembles the FHIR Bundle, and runs the payer pipeline in the
+    background. Returns a case_id immediately; poll GET /v1/cases/{case_id}
+    for live status.
+    """
     pdf_bytes = await pdf.read()
     if not pdf_bytes:
         raise HTTPException(400, "pdf upload is empty")
+    pdf_filename = pdf.filename or "upload.pdf"
 
+    case_id = f"doc-{uuid.uuid4().hex[:10]}"
+
+    # Persist a minimal Case row in `extracting_metadata` stage so the polling UI
+    # sees something instantly while the metadata extractor runs (which takes
+    # ~5-15s synchronously below).
+    await _create_extracting_metadata_case(case_id, pdf_bytes, pdf_filename)
+
+    # Run the metadata extractor synchronously so we can return the extracted
+    # metadata to the doctor's UI as part of the submission response (so they
+    # can verify what the system pulled before the slow pipeline starts).
     try:
-        submission = _build_submission_from_payload(data, pdf_bytes, pdf.filename or "upload.pdf")
-    except (KeyError, ValueError) as e:
-        raise HTTPException(400, f"metadata missing or invalid: {e}") from e
+        meta_result = await _extract_metadata_sync(case_id, pdf_bytes, pdf_filename)
+    except Exception as e:
+        log.exception("doctor.metadata_extraction_failed", case_id=case_id)
+        await _update_case_stage(case_id, "failed", error=f"Metadata extraction failed: {e!s}")
+        raise HTTPException(500, f"Could not extract metadata from PDF: {e!s}") from e
 
-    case_id = data.get("case_id") or f"doc-{uuid.uuid4().hex[:10]}"
-    bundle, _ = build_pas_bundle(submission, case_id=case_id)
+    missing = missing_required_fields(meta_result.metadata)
+    if missing:
+        await _update_case_stage(
+            case_id, "failed",
+            error=f"Could not determine required fields from PDF: {', '.join(missing)}",
+        )
+        return {
+            "case_id": case_id,
+            "processing_stage": "failed",
+            "missing_fields": missing,
+            "extraction_notes": meta_result.notes,
+            "extracted_metadata": meta_result.metadata.model_dump(),
+            "error": (
+                f"PDF did not contain enough information to assemble a PAS submission. "
+                f"Missing: {', '.join(missing)}. The extractor's reasoning is in "
+                f"`extraction_notes`. Re-submit with a clearer PDF or a written "
+                f"physician order page."
+            ),
+        }
 
-    # Create the Case row immediately so the polling UI sees it on the first tick
-    await _create_pending_case(case_id, submission, bundle)
+    # Build the Bundle from extracted metadata
+    bundle, _ = build_pas_bundle(meta_result.submission, case_id=case_id)
 
-    # Fire the pipeline in the background
+    # Update the Case row with the now-known fields + Bundle
+    await _populate_case_after_extraction(case_id, meta_result.submission, bundle)
+    await _update_case_stage(case_id, "received")
+
+    # Fire the payer pipeline in the background
     asyncio.create_task(_run_pipeline_async(case_id, bundle))
 
     return {
         "case_id": case_id,
         "processing_stage": "received",
+        "extracted_metadata": meta_result.metadata.model_dump(),
+        "extraction_notes": meta_result.notes,
+        "metadata_usage_cost_usd": round(meta_result.usage.cost_usd, 4),
         "bundle_entry_count": len(bundle["entry"]),
-        "bundle_size_bytes": _approx_bundle_size(bundle),
+        "bundle_size_bytes": len(json.dumps(bundle)),
         "bundle_preview": bundle,
     }
 
@@ -85,83 +131,58 @@ async def doctor_submit(
 # ---------------------------------------------------------------------------
 
 
-def _build_submission_from_payload(
-    data: dict, pdf_bytes: bytes, pdf_filename: str
-) -> SubmissionData:
-    icd10_raw = data.get("icd10_codes") or []
-    icd10s: list[ICD10Code] = []
-    for entry in icd10_raw:
-        if isinstance(entry, str):
-            icd10s.append(ICD10Code(code=entry, display=entry, kind="secondary"))
-        else:
-            icd10s.append(ICD10Code(
-                code=entry["code"],
-                display=entry.get("display", entry["code"]),
-                kind=entry.get("kind", "secondary"),
-            ))
-    if not icd10s:
-        raise ValueError("at least one icd10 code is required")
-    # Ensure exactly one primary
-    primaries = [c for c in icd10s if c.kind == "primary"]
-    if not primaries:
-        icd10s[0].kind = "primary"
+async def _extract_metadata_sync(
+    case_id: str, pdf_bytes: bytes, pdf_filename: str
+) -> MetadataResult:
+    """Run the metadata extractor synchronously inside the request handler.
 
-    return SubmissionData(
-        patient_given=data["patient_given"],
-        patient_family=data["patient_family"],
-        patient_dob=data["patient_dob"],
-        patient_gender=data.get("patient_gender", "unknown"),
-        patient_state=data["patient_state"],
-        payer_id=data["payer_id"],
-        payer_display=data.get("payer_display", data["payer_id"].title()),
-        member_id=data["member_id"],
-        line_of_business=data["line_of_business"],
-        plan_name=data.get("plan_name", data["payer_id"]),
-        cpt_code=data["cpt_code"],
-        cpt_display=data.get("cpt_display", data["cpt_code"]),
-        service_date=data["service_date"],
-        icd10_codes=icd10s,
-        body_site_display=data.get("body_site_display", ""),
-        pdf_bytes=pdf_bytes,
-        pdf_filename=pdf_filename,
-        provider_org_name=data.get("provider_org_name", "Submitting Provider"),
-        practitioner_family=data.get("practitioner_family", "Provider"),
-        practitioner_given=data.get("practitioner_given", "Doctor"),
+    Cost: ~$0.05-0.10 per call. Takes ~5-15 seconds. Done sync so the doctor
+    UI can show the extracted metadata immediately on submit response.
+    """
+    # Write to a temp file so extract_pdf can open it
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(pdf_bytes)
+        tmp_path = f.name
+
+    doc = extract_pdf(tmp_path, document_id=f"upload-{case_id}")
+    log.info("doctor.metadata_extracting", case_id=case_id, pages=doc.page_count)
+    return await extract_submission_metadata(
+        doc, pdf_bytes=pdf_bytes, pdf_filename=pdf_filename
     )
 
 
-async def _create_pending_case(
-    case_id: str, submission: SubmissionData, bundle: dict
+async def _create_extracting_metadata_case(
+    case_id: str, pdf_bytes: bytes, pdf_filename: str
 ) -> None:
-    """Insert the Case row in `received` state so the polling UI has something
-    to render immediately. Subsequent stage updates mutate this row in place."""
+    """Pre-create a Case row with stage='extracting_metadata' so polling sees
+    the case instantly (the metadata extractor will block ~5-15s)."""
     async with session_scope() as session:
-        existing = await session.get(Case, case_id)
-        patient_display = f"{submission.patient_given} {submission.patient_family}".strip()
-        if existing:
-            existing.status = "processing"
-            existing.processing_stage = "received"
-            existing.error_message = None
-            existing.patient_display = patient_display
-            existing.cpt_code = submission.cpt_code
-            existing.payer_id = submission.payer_id
-            existing.inbound_bundle = bundle
-            return
         case = Case(
             id=case_id,
             status="processing",
-            processing_stage="received",
-            patient_display=patient_display,
-            cpt_code=submission.cpt_code,
-            payer_id=submission.payer_id,
-            inbound_bundle=bundle,
+            processing_stage="extracting_metadata",
+            patient_display=f"(extracting from {pdf_filename})",
         )
         session.add(case)
 
 
+async def _populate_case_after_extraction(
+    case_id: str, submission: SubmissionData, bundle: dict
+) -> None:
+    """After metadata extraction succeeds, fill in patient/cpt/payer + Bundle."""
+    async with session_scope() as session:
+        case = await session.get(Case, case_id)
+        if not case:
+            return
+        case.patient_display = f"{submission.patient_given} {submission.patient_family}".strip()
+        case.cpt_code = submission.cpt_code
+        case.payer_id = submission.payer_id
+        case.inbound_bundle = bundle
+
+
 async def _run_pipeline_async(case_id: str, bundle: dict) -> None:
-    """Background task: runs the full orchestrator and persists the result.
-    Writes stage updates between pipeline steps so the doctor UI sees progress."""
+    """Background task: runs intake + selector + adjudicator + reviewer + bundle
+    builder, writing processing_stage between steps. Persists the final result."""
 
     async def stage_cb(stage: str) -> None:
         await _update_case_stage(case_id, stage)
@@ -174,15 +195,12 @@ async def _run_pipeline_async(case_id: str, bundle: dict) -> None:
             progress_callback=stage_cb,
         )
         await _persist(run)
-        # _persist already sets processing_stage="complete", but in case of an
-        # early no-match return we set it here as a belt-and-suspenders.
         await _update_case_stage(case_id, "complete")
-        log.info("doctor.pipeline_complete", case_id=case_id,
-                 outcome=run.determination.outcome if run.determination else None)
+        log.info(
+            "doctor.pipeline_complete",
+            case_id=case_id,
+            outcome=run.determination.outcome if run.determination else None,
+        )
     except Exception as e:
         log.exception("doctor.pipeline_failed", case_id=case_id, error=str(e))
         await _update_case_stage(case_id, "failed", error=str(e)[:1500])
-
-
-def _approx_bundle_size(bundle: dict) -> int:
-    return len(json.dumps(bundle))

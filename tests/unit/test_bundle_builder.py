@@ -1,17 +1,35 @@
-import json
-
 from app.determination.decider import Determination
 from app.determination.reviewer import EvidenceCitation, MissingInfo, ReviewerOutput
 from app.pas.bundle_builder import build_pas_response_bundle
+from app.pas.bundle_constructor import ICD10Code, SubmissionData, build_pas_bundle
 from app.pas.bundle_parser import parse_pas_bundle
 from app.policy.adjudicator import CriterionVerdict
 from app.policy.registry import PolicyRegistry, reset_registry
-from app.settings import PROJECT_ROOT
 
 
-def _smith_parsed():
+SAMPLE_PDF = b"%PDF-1.4\n%fake pdf bytes for unit test\n%%EOF\n"
+
+
+def _synthetic_parsed(case_id: str = "builder-test-001"):
+    """Build + parse a synthetic Bundle inline; no Smith fixture dependency."""
     reset_registry()
-    bundle = json.loads((PROJECT_ROOT / "tests/fixtures/smith_claim_bundle.json").read_text())
+    submission = SubmissionData(
+        patient_given="Test", patient_family="Patient",
+        patient_dob="1975-11-02", patient_gender="male", patient_state="NY",
+        payer_id="molina", payer_display="Molina Healthcare of New York",
+        member_id="KF464W", line_of_business="medicaid",
+        plan_name="Molina Medicaid NY",
+        cpt_code="62323",
+        cpt_display="Lumbar interlaminar ESI with imaging guidance",
+        service_date="2026-04-08",
+        icd10_codes=[
+            ICD10Code("M54.16", "Radiculopathy, lumbar region", "primary"),
+            ICD10Code("M79.18", "Other myalgia", "secondary"),
+        ],
+        body_site_display="Lumbar — L4/5",
+        pdf_bytes=SAMPLE_PDF, pdf_filename="test.pdf",
+    )
+    bundle, _ = build_pas_bundle(submission, case_id=case_id)
     return parse_pas_bundle(bundle)
 
 
@@ -22,7 +40,7 @@ def _registry():
 
 
 def test_builds_pend_bundle_for_smith():
-    parsed = _smith_parsed()
+    parsed = _synthetic_parsed()
     policy = _registry().get("molina-mcp-032")
     determination = Determination(
         outcome="pend",
@@ -96,7 +114,7 @@ def test_builds_pend_bundle_for_smith():
 
 
 def test_builds_approve_bundle_with_preauthref():
-    parsed = _smith_parsed()
+    parsed = _synthetic_parsed()
     policy = _registry().get("molina-mcp-032")
     determination = Determination(
         outcome="approve",
@@ -132,7 +150,7 @@ def test_builds_approve_bundle_with_preauthref():
 
 
 def test_builds_deny_bundle_when_exclusion_fires():
-    parsed = _smith_parsed()
+    parsed = _synthetic_parsed()
     policy = _registry().get("molina-mcp-032")
     determination = Determination(
         outcome="deny",

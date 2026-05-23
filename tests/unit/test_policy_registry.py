@@ -19,13 +19,13 @@ def test_loads_molina_policy_cleanly():
     reg = PolicyRegistry()
     reg.load_dir()
     policies = reg.all_policies()
-    assert len(policies) == 1
-    p = policies[0]
-    assert p.policy_id == "molina-mcp-032"
-    assert p.payer_id == "molina"
-    assert "62323" in p.applies_to.cpt_codes
-    assert "medicaid" in p.applies_to.lines_of_business
-    assert "NY" in p.applies_to.states
+    assert len(policies) >= 1
+    esi = reg.get("molina-mcp-032")
+    assert esi is not None
+    assert esi.payer_id == "molina"
+    assert "62323" in esi.applies_to.cpt_codes
+    assert "medicaid" in esi.applies_to.lines_of_business
+    assert "NY" in esi.applies_to.states
 
 
 def test_indexes_by_cpt():
@@ -40,7 +40,9 @@ def test_indexes_by_cpt():
 def test_indexes_by_payer():
     reg = PolicyRegistry()
     reg.load_dir()
-    assert len(reg.policies_for_payer("molina")) == 1
+    molina = reg.policies_for_payer("molina")
+    assert len(molina) >= 1
+    assert all(p.payer_id == "molina" for p in molina)
     assert reg.policies_for_payer("aetna") == []
 
 

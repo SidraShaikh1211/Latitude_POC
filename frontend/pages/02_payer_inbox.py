@@ -33,10 +33,9 @@ def main() -> None:
 
     if not cases:
         st.info(
-            "No cases yet. Run `.venv/bin/python -m scripts.seed_smith_case` "
-            "to generate the Smith fixture, then `curl -X POST "
-            f"{API_BASE}/fhir/Claim/\\$submit -d @tests/fixtures/smith_claim_bundle.json "
-            "-H 'Content-Type: application/json'` to evaluate it."
+            "No cases yet. Either:\n"
+            "1. Run `make seed` to ingest the Smith PDF through the doctor flow, OR\n"
+            "2. Open the Doctor Workspace and upload a patient PDF directly."
         )
         return
 

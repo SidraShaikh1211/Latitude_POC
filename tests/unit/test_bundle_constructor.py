@@ -8,7 +8,6 @@ from app.pas.bundle_constructor import (
     ICD10Code,
     SubmissionData,
     build_pas_bundle,
-    smith_submission,
 )
 from app.pas.bundle_parser import parse_pas_bundle
 
@@ -114,21 +113,6 @@ def test_lob_maps_to_v3_actcode():
         coverage = next(e["resource"] for e in bundle["entry"]
                          if e["resource"]["resourceType"] == "Coverage")
         assert coverage["type"]["coding"][0]["code"] == expected
-
-
-def test_smith_submission_round_trip():
-    """smith_submission() + build_pas_bundle() should produce a parseable Bundle
-    indistinguishable in core fields from the historical hardcoded Smith fixture."""
-    sub = smith_submission(SAMPLE_PDF)  # synthetic bytes are fine for this test
-    bundle, case_id = build_pas_bundle(sub, case_id="smith-rt")
-    parsed = parse_pas_bundle(bundle)
-    ctx = parsed.context
-    assert ctx.cpt_code == "62323"
-    assert ctx.payer_id == "molina"
-    assert ctx.state == "NY"
-    assert ctx.patient_age == 50  # 1975-11-02 → 2026-04-08
-    icd_codes = set(ctx.icd10_codes)
-    assert {"M54.16", "M79.18", "M47.816"}.issubset(icd_codes)
 
 
 def test_dict_icd10_input_also_works():

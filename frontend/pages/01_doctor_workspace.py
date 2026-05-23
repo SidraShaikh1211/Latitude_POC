@@ -1,27 +1,23 @@
-"""Doctor workspace — upload a clinical PDF, fill the form, watch it process.
+"""Doctor workspace — PDF-only flow.
+
+The doctor uploads a single clinical PDF. The system extracts patient
+demographics, coverage info, and the requested service (including CPT
+codes inferred from clinical context) automatically. Then the FHIR Bundle
+is assembled and the payer pipeline runs.
 
 Sections:
-  A. Submit form (PDF upload + patient + coverage + service)
-  B. My submissions (live status, polled every 2s via st.fragment)
-
-The "My submissions" list is session-scoped (st.session_state) — refreshing
-the browser clears it. This is intentional: the doctor's view is their
-ephemeral inbox; the payer's view (separate page) is the persistent record.
-
-Doctor-facing status maps multiple internal pipeline stages into 3 buckets:
-  📨 Payer received request           (received, parsing)
-  🔍 Request analysis in progress     (intake, selecting, adjudicating, reviewing, building_response)
-  ✅ Complete (with outcome + narrative + missing-info)
-  ❌ Failed (with error excerpt)
+  A. Upload + Submit (no form fields)
+  B. My submissions (polled every 2s)
+     - In-progress cases show simplified status
+     - Completed cases show outcome + Reviewer narrative + per-criterion
+       citation cards ("Why this decision?")
 """
 
 from __future__ import annotations
 
 import json
 import os
-import time
-from datetime import date, datetime, timezone
-from typing import Any
+from datetime import datetime, timezone
 
 import requests
 import streamlit as st
@@ -31,41 +27,32 @@ API_BASE = os.environ.get("STREAMLIT_API_BASE", "http://127.0.0.1:8000")
 
 
 # ---------------------------------------------------------------------------
-# Stage → doctor-facing label / progress mapping
+# Stage → doctor-facing label / progress
 # ---------------------------------------------------------------------------
 
 _DOCTOR_STAGE = {
-    "received":          ("📨 Payer received request",       5),
-    "parsing":           ("📨 Payer received request",      10),
-    "intake":            ("🔍 Request analysis in progress", 25),
-    "selecting":         ("🔍 Request analysis in progress", 35),
-    "adjudicating":      ("🔍 Request analysis in progress", 65),
-    "reviewing":         ("🔍 Request analysis in progress", 85),
-    "building_response": ("🔍 Request analysis in progress", 95),
-    "complete":          ("✅ Complete",                    100),
-    "failed":            ("❌ Submission failed",           100),
+    "extracting_metadata": ("📋 Reading your PDF",                     8),
+    "received":            ("📨 Payer received request",              15),
+    "parsing":             ("📨 Payer received request",              20),
+    "intake":              ("🔍 Request analysis in progress",        35),
+    "selecting":           ("🔍 Request analysis in progress",        45),
+    "adjudicating":        ("🔍 Request analysis in progress",        70),
+    "reviewing":           ("🔍 Request analysis in progress",        88),
+    "building_response":   ("🔍 Request analysis in progress",        96),
+    "complete":            ("✅ Complete",                           100),
+    "failed":              ("❌ Submission failed",                  100),
 }
 
 _OUTCOME_LABEL = {
-    "approve":             ("🟢 APPROVED",       "green"),
-    "deny":                ("🔴 DENIED",         "red"),
-    "pend":                ("🟡 PENDED — info requested", "orange"),
-    "needs_human_review":  ("🟣 SENT TO HUMAN REVIEW",     "violet"),
+    "approve":            ("🟢 APPROVED",                      "green"),
+    "deny":               ("🔴 DENIED",                        "red"),
+    "pend":               ("🟡 PENDED — info requested",       "orange"),
+    "needs_human_review": ("🟣 SENT TO HUMAN REVIEW",          "violet"),
 }
-
 
 # ---------------------------------------------------------------------------
 # API helpers
 # ---------------------------------------------------------------------------
-
-@st.cache_data(ttl=300)
-def fetch_policies() -> list[dict]:
-    try:
-        r = requests.get(f"{API_BASE}/v1/policies", timeout=5)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return []
 
 
 def fetch_case(case_id: str) -> dict | None:
@@ -79,289 +66,95 @@ def fetch_case(case_id: str) -> dict | None:
         return {"_error": str(e)}
 
 
-def submit_case(metadata: dict, pdf_bytes: bytes, filename: str) -> dict:
+def submit_pdf(pdf_bytes: bytes, filename: str) -> dict:
     files = {"pdf": (filename, pdf_bytes, "application/pdf")}
-    data = {"metadata": json.dumps(metadata)}
-    r = requests.post(f"{API_BASE}/v1/doctor/submit", files=files, data=data, timeout=30)
+    r = requests.post(f"{API_BASE}/v1/doctor/submit", files=files, timeout=120)
     r.raise_for_status()
     return r.json()
 
 
 # ---------------------------------------------------------------------------
-# Form helpers
+# Section A — Upload + Submit
 # ---------------------------------------------------------------------------
 
 
-def _policy_dropdown_options(policies: list[dict]) -> dict[str, dict]:
-    """Build {label: policy_dict} for the payer/CPT/state dropdowns."""
-    return {f"{p['name']} ({p['payer_id']})": p for p in policies}
-
-
-def _smith_defaults() -> dict[str, Any]:
-    return {
-        "patient_given": "David",
-        "patient_family": "Smith",
-        "patient_dob": "1975-11-02",
-        "patient_gender": "male",
-        "patient_state": "NY",
-        "payer_id": "molina",
-        "payer_display": "Molina Healthcare of New York",
-        "member_id": "KF464W",
-        "line_of_business": "medicaid",
-        "plan_name": "Molina Medicaid NY",
-        "cpt_code": "62323",
-        "cpt_display": "Lumbar interlaminar epidural steroid injection with imaging guidance",
-        "service_date": "2026-04-08",
-        "icd10_primary_code": "M54.16",
-        "icd10_primary_display": "Radiculopathy, lumbar region",
-        "icd10_secondary_text": "M79.18 — Other myalgia\nM47.816 — Spondylosis without myelopathy or radiculopathy, lumbar region",
-        "body_site_display": "Lumbar — L4/5 vs L5/S1",
-        "provider_org_name": "NYU Langone Health — Center for the Study and Treatment of Pain",
-    }
-
-
-def _parse_secondary_icd10(text: str) -> list[dict]:
-    """Parse one-per-line ICD-10 entries. Format: 'CODE' or 'CODE — display'."""
-    out = []
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # Split on em-dash or hyphen
-        if "—" in line:
-            code, _, disp = line.partition("—")
-        elif " - " in line:
-            code, _, disp = line.partition(" - ")
-        else:
-            code, disp = line, line
-        out.append({
-            "code": code.strip(),
-            "display": disp.strip() or code.strip(),
-            "kind": "secondary",
-        })
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Submit form
-# ---------------------------------------------------------------------------
-
-
-def render_submit_form(policies: list[dict]) -> None:
-    if not policies:
-        st.warning("No policies loaded by the payer — submissions will return `no_match`.")
-
-    # "Load Smith demo data" button populates session_state
-    cols = st.columns([3, 2, 2])
-    cols[0].markdown("##### Submit a new prior authorization")
-    if cols[2].button("🧪 Load Smith demo data", help="Pre-fill the form with David Smith case values"):
-        for k, v in _smith_defaults().items():
-            st.session_state[f"form_{k}"] = v
-        st.rerun()
-
-    pdf_file = st.file_uploader(
-        "📎 Clinical PDF (H&P, fax bundle, progress notes)",
-        type="pdf",
-        help="The payer's intake agent will extract FHIR resources from this PDF with verbatim citations.",
+def render_submit_section() -> None:
+    st.markdown("##### Upload a clinical PDF")
+    st.caption(
+        "Drop a patient's clinical document (H&P, fax bundle, progress notes). "
+        "The system will read the PDF and extract patient demographics, "
+        "insurance info, requested CPT code (inferred from clinical context if "
+        "not written explicitly), and ICD-10 diagnoses — no form fields needed."
     )
 
-    with st.form("doctor_submit_form", clear_on_submit=False):
-        # PATIENT
-        st.markdown("###### 👤 Patient")
-        c1, c2, c3, c4 = st.columns(4)
-        patient_given = c1.text_input("Given name", key="form_patient_given", placeholder="David")
-        patient_family = c2.text_input("Family name", key="form_patient_family", placeholder="Smith")
-        patient_dob = c3.text_input("DOB (YYYY-MM-DD)", key="form_patient_dob", placeholder="1975-11-02")
-        patient_gender = c4.selectbox(
-            "Gender",
-            ["male", "female", "other", "unknown"],
-            index=["male", "female", "other", "unknown"].index(st.session_state.get("form_patient_gender", "male"))
-                  if st.session_state.get("form_patient_gender") in ("male","female","other","unknown") else 0,
-            key="form_patient_gender",
-        )
+    pdf_file = st.file_uploader(
+        "Clinical PDF",
+        type="pdf",
+        help=(
+            "The metadata extractor (Claude) reads the PDF and infers CPT codes "
+            "from descriptions like 'lumbar interlaminar ESI at L4/5' → 62323."
+        ),
+        label_visibility="collapsed",
+    )
 
-        # COVERAGE
-        st.markdown("###### 🏥 Coverage")
-        c1, c2, c3, c4 = st.columns(4)
-        # Payer dropdown — derived from loaded policies
-        payer_ids = sorted({p["payer_id"] for p in policies}) or ["(no payers loaded)"]
-        cur_payer = st.session_state.get("form_payer_id", payer_ids[0] if payer_ids else "")
-        payer_id = c1.selectbox(
-            "Payer",
-            payer_ids,
-            index=payer_ids.index(cur_payer) if cur_payer in payer_ids else 0,
-            key="form_payer_id",
-        )
-        payer_display = c2.text_input("Payer display name", key="form_payer_display",
-                                       placeholder="Molina Healthcare of New York")
-        member_id = c3.text_input("Member ID", key="form_member_id", placeholder="KF464W")
-        # LOB
-        lobs = sorted({lob for p in policies for lob in p["lines_of_business"]}) or ["medicaid"]
-        cur_lob = st.session_state.get("form_line_of_business", lobs[0])
-        line_of_business = c4.selectbox(
-            "Line of business",
-            lobs,
-            index=lobs.index(cur_lob) if cur_lob in lobs else 0,
-            key="form_line_of_business",
-        )
-        c1, c2 = st.columns(2)
-        # State
-        states = sorted({s for p in policies for s in p["states"]}) or ["NY"]
-        cur_state = st.session_state.get("form_patient_state", states[0])
-        patient_state = c1.selectbox(
-            "Patient state",
-            states,
-            index=states.index(cur_state) if cur_state in states else 0,
-            key="form_patient_state",
-        )
-        plan_name = c2.text_input("Plan name (e.g. 'Molina Medicaid NY')",
-                                   key="form_plan_name", placeholder="Molina Medicaid NY")
+    submit = st.button(
+        "📤 Submit to Payer",
+        type="primary",
+        disabled=pdf_file is None,
+        use_container_width=False,
+    )
 
-        # SERVICE REQUEST
-        st.markdown("###### 🛠 Service requested")
-        c1, c2, c3 = st.columns([1, 1, 2])
-        # CPT — flatten all CPTs from loaded policies for hint, but allow free text
-        all_cpts = sorted({c for p in policies for c in p["cpt_codes"]})
-        cpt_help = f"Examples (must match a loaded policy): {', '.join(all_cpts)}" if all_cpts else ""
-        cpt_code = c1.text_input("CPT code", key="form_cpt_code", placeholder="62323", help=cpt_help)
-        service_date = c2.text_input("Date of service (YYYY-MM-DD)",
-                                      key="form_service_date",
-                                      placeholder=date.today().isoformat())
-        cpt_display = c3.text_input("CPT description (free text)",
-                                     key="form_cpt_display",
-                                     placeholder="Lumbar interlaminar ESI with imaging guidance")
-
-        # ICD-10 — split into primary + secondary text area
-        st.markdown("###### 🩺 Diagnoses (ICD-10)")
-        c1, c2 = st.columns(2)
-        icd10_primary_code = c1.text_input("Primary diagnosis code",
-                                            key="form_icd10_primary_code",
-                                            placeholder="M54.16")
-        icd10_primary_display = c2.text_input("Primary diagnosis description",
-                                               key="form_icd10_primary_display",
-                                               placeholder="Radiculopathy, lumbar region")
-        icd10_secondary_text = st.text_area(
-            "Secondary diagnoses (one per line, format: `CODE — display`)",
-            key="form_icd10_secondary_text",
-            placeholder="M79.18 — Other myalgia",
-            height=100,
-        )
-
-        # PROVIDER / BODY SITE
-        c1, c2 = st.columns(2)
-        body_site_display = c1.text_input("Body site (free text)",
-                                           key="form_body_site_display",
-                                           placeholder="Lumbar — L4/5 vs L5/S1")
-        provider_org_name = c2.text_input("Submitting provider org",
-                                           key="form_provider_org_name",
-                                           placeholder="Submitting Provider")
-
-        # Buttons
-        st.markdown("---")
-        b1, b2, _ = st.columns([1, 1, 4])
-        preview_clicked = b1.form_submit_button("👁 Preview Bundle", use_container_width=True)
-        submit_clicked = b2.form_submit_button("📤 Submit to Payer",
-                                                type="primary",
-                                                use_container_width=True)
-
-    # Process form actions outside the form
-    if preview_clicked or submit_clicked:
-        if pdf_file is None:
-            st.error("❌ Please upload a clinical PDF before previewing or submitting.")
+    if submit and pdf_file is not None:
+        try:
+            with st.spinner(
+                "📋 Reading your PDF and extracting metadata (this takes 10-15 seconds)..."
+            ):
+                resp = submit_pdf(pdf_file.getvalue(), pdf_file.name)
+        except Exception as e:
+            st.error(f"❌ Submission failed: {e}")
             return
-        # Validate required fields
-        required = {
-            "patient_given": patient_given,
-            "patient_family": patient_family,
-            "patient_dob": patient_dob,
-            "payer_id": payer_id,
-            "member_id": member_id,
-            "cpt_code": cpt_code,
-            "service_date": service_date,
-            "icd10_primary_code": icd10_primary_code,
+
+        if resp.get("processing_stage") == "failed":
+            # Metadata extraction couldn't fill required fields
+            st.error("❌ " + (resp.get("error") or "Metadata extraction failed."))
+            with st.expander("📋 What the extractor found (and what was missing)"):
+                st.write(f"**Missing fields:** {', '.join(resp.get('missing_fields', []))}")
+                st.write(f"**Extraction notes:** {resp.get('extraction_notes', '')}")
+                st.json(resp.get("extracted_metadata") or {})
+            return
+
+        # Successful submission — record in session for live polling
+        meta = resp.get("extracted_metadata") or {}
+        patient = (meta.get("patient") or {})
+        sr = (meta.get("service_request") or {})
+        subs = st.session_state.setdefault("my_submissions", [])
+        entry = {
+            "case_id": resp["case_id"],
+            "patient": (
+                f"{patient.get('patient_given', '')} {patient.get('patient_family', '')}".strip()
+                or "(unknown)"
+            ),
+            "cpt": sr.get("cpt_code"),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "metadata_cost_usd": resp.get("metadata_usage_cost_usd", 0),
+            "bundle_entry_count": resp.get("bundle_entry_count"),
+            "bundle_size_bytes": resp.get("bundle_size_bytes"),
+            "extracted_metadata": meta,
+            "extraction_notes": resp.get("extraction_notes", ""),
         }
-        missing = [k for k, v in required.items() if not (v or "").strip()]
-        if missing:
-            st.error(f"❌ Missing required fields: {', '.join(missing)}")
-            return
-
-        # Build the metadata payload
-        icd10_codes = [{
-            "code": icd10_primary_code.strip(),
-            "display": (icd10_primary_display or icd10_primary_code).strip(),
-            "kind": "primary",
-        }]
-        icd10_codes.extend(_parse_secondary_icd10(icd10_secondary_text))
-        metadata = {
-            "patient_given": patient_given,
-            "patient_family": patient_family,
-            "patient_dob": patient_dob,
-            "patient_gender": patient_gender,
-            "patient_state": patient_state,
-            "payer_id": payer_id,
-            "payer_display": payer_display or payer_id.title(),
-            "member_id": member_id,
-            "line_of_business": line_of_business,
-            "plan_name": plan_name or payer_id,
-            "cpt_code": cpt_code,
-            "cpt_display": cpt_display or cpt_code,
-            "service_date": service_date,
-            "icd10_codes": icd10_codes,
-            "body_site_display": body_site_display,
-            "provider_org_name": provider_org_name or "Submitting Provider",
-        }
-
-        if preview_clicked:
-            # Show the Bundle preview without submitting
-            try:
-                # Call submit endpoint with a stash flag would be ideal, but for
-                # simplicity we just build the bundle client-side via the same
-                # endpoint and discard the response (it'll process in background).
-                # Better: a dedicated /v1/doctor/preview endpoint. For POC, we
-                # piggyback on submit and let the user see what would happen.
-                # → Actually we'll just preview the metadata for now.
-                st.info("Bundle preview shows the metadata that will be assembled. "
-                        "The full Bundle (with base64 PDF) is generated server-side on submit.")
-                with st.expander("📋 Metadata that will be assembled into a PAS Bundle", expanded=True):
-                    st.json(metadata)
-                with st.expander("📎 PDF attachment"):
-                    st.write(f"File: `{pdf_file.name}`  ·  Size: {len(pdf_file.getvalue()):,} bytes")
-            except Exception as e:
-                st.error(f"Preview failed: {e}")
-            return
-
-        if submit_clicked:
-            try:
-                with st.spinner("Assembling FHIR Bundle and submitting to payer..."):
-                    resp = submit_case(metadata, pdf_file.getvalue(), pdf_file.name)
-            except Exception as e:
-                st.error(f"❌ Submission failed: {e}")
-                return
-
-            # Record submission for the live-status list
-            subs = st.session_state.setdefault("my_submissions", [])
-            entry = {
-                "case_id": resp["case_id"],
-                "patient": f"{patient_given} {patient_family}".strip(),
-                "cpt": cpt_code,
-                "payer": payer_id,
-                "submitted_at": datetime.now(timezone.utc).isoformat(),
-                "bundle_entry_count": resp.get("bundle_entry_count"),
-                "bundle_size_bytes": resp.get("bundle_size_bytes"),
-            }
-            # Prepend so the newest is at the top
-            subs.insert(0, entry)
-            # Stash the bundle preview for the expander in the status card
-            st.session_state[f"bundle_preview_{resp['case_id']}"] = resp.get("bundle_preview")
-            st.success(
-                f"✅ Submitted to payer  ·  case_id `{resp['case_id']}`  ·  "
-                f"Bundle: {resp.get('bundle_entry_count')} entries, "
-                f"{resp.get('bundle_size_bytes', 0):,} bytes"
-            )
+        subs.insert(0, entry)
+        # Stash bundle preview for the case-card expander
+        st.session_state[f"bundle_preview_{resp['case_id']}"] = resp.get("bundle_preview")
+        st.success(
+            f"✅ Submitted to payer  ·  case_id `{resp['case_id']}`  ·  "
+            f"CPT inferred: `{sr.get('cpt_code') or '?'}`  ·  "
+            f"Bundle: {resp.get('bundle_entry_count')} entries, "
+            f"{resp.get('bundle_size_bytes', 0):,} bytes"
+        )
 
 
 # ---------------------------------------------------------------------------
-# My submissions list (polled)
+# Section B — case-card renderers
 # ---------------------------------------------------------------------------
 
 
@@ -374,74 +167,123 @@ def _seconds_ago(iso: str) -> int:
         return 0
 
 
+def render_extracted_metadata_panel(entry: dict) -> None:
+    meta = entry.get("extracted_metadata") or {}
+    if not meta:
+        return
+    p = meta.get("patient") or {}
+    c = meta.get("coverage") or {}
+    s = meta.get("service_request") or {}
+    with st.expander("📋 What we extracted from the PDF", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Patient**")
+            st.write(f"Name: `{p.get('patient_given') or '?'} {p.get('patient_family') or '?'}`")
+            st.write(f"DOB: `{p.get('patient_dob') or '?'}`  ·  Gender: `{p.get('patient_gender') or '?'}`")
+            st.write(f"State: `{p.get('patient_state') or '?'}`")
+            st.markdown("**Coverage**")
+            st.write(f"Payer: `{c.get('payer_id') or '?'}` ({c.get('payer_display') or '?'})")
+            st.write(f"Member ID: `{c.get('member_id') or '?'}`")
+            st.write(f"LOB: `{c.get('line_of_business') or '?'}`  ·  Plan: `{c.get('plan_name') or '?'}`")
+        with col2:
+            st.markdown("**Service requested**")
+            st.write(f"CPT: `{s.get('cpt_code') or '?'}`  ·  DOS: `{s.get('service_date') or '?'}`")
+            st.write(f"_{s.get('cpt_display') or ''}_")
+            st.write(f"Body site: `{s.get('body_site_display') or '?'}`")
+            st.markdown("**ICD-10**")
+            for icd in s.get("icd10_codes") or []:
+                st.write(f"- `{icd.get('code')}` ({icd.get('kind')}) — {icd.get('display')}")
+        notes = entry.get("extraction_notes")
+        if notes:
+            st.markdown("**Extraction reasoning (what was explicit vs inferred):**")
+            st.caption(notes)
+
+
+# (per-criterion drill-down view intentionally omitted from the doctor UI;
+# the brief Reviewer narrative + missing-info is sufficient for the doctor.
+# Full criteria-tree is on the payer's case detail page.)
+
+
 def render_status_card(entry: dict, case: dict | None) -> None:
     case_id = entry["case_id"]
     with st.container(border=True):
         header_cols = st.columns([3, 2, 2])
         header_cols[0].markdown(f"**Case `{case_id}`**")
         header_cols[1].caption(
-            f"Patient: {entry.get('patient') or '—'}  •  CPT: {entry.get('cpt') or '—'}"
+            f"Patient: {entry.get('patient') or '—'}  •  "
+            f"CPT: `{entry.get('cpt') or '—'}`"
         )
         header_cols[2].caption(f"Submitted {_seconds_ago(entry['submitted_at'])}s ago")
 
         if case is None:
-            st.warning("Could not load case status from payer.")
+            st.warning("Case not yet visible to the payer (try refreshing in a few seconds).")
             return
         if case.get("_error"):
             st.warning(f"API error: {case['_error']}")
             return
 
-        stage = case.get("processing_stage") or "received"
+        stage = case.get("processing_stage") or "extracting_metadata"
         label, pct = _DOCTOR_STAGE.get(stage, (f"Stage: {stage}", 0))
 
         if stage == "complete":
             outcome = case.get("outcome") or "needs_human_review"
-            label, color = _OUTCOME_LABEL.get(outcome, ("✅ Complete", "gray"))
-            st.markdown(f":{color}[**{label}**]")
+            badge, color = _OUTCOME_LABEL.get(outcome, ("✅ Complete", "gray"))
+            st.markdown(f":{color}[**{badge}**]")
             det = case.get("determination") or {}
             if det.get("narrative"):
                 st.markdown("**Reviewer narrative:**")
                 st.write(det["narrative"])
             mi = det.get("missing_info") or []
             if mi:
-                st.markdown(f"**Missing information ({len(mi)}):**")
+                st.markdown(f"**📨 Missing information requested ({len(mi)}):**")
                 for m in mi:
-                    st.markdown(f"- **{m.get('id', '?')}** — {m.get('request', '')[:300]}")
-            # Link to payer-side detail
-            cols = st.columns([2, 2, 4])
-            if cols[0].button(f"📋 View full payer detail", key=f"view_payer_{case_id}"):
-                st.query_params["case_id"] = case_id
-                st.switch_page("pages/03_payer_case_detail.py")
-            # Bundle preview
+                    with st.container(border=True):
+                        st.markdown(f"**{m.get('id', '?')}** — {m.get('request', '')}")
+                        st.caption(f"Criterion: `{m.get('criterion_id', '?')}`")
+
+            # Show extracted metadata + bundle preview + payer detail link
+            st.markdown("---")
+            render_extracted_metadata_panel(entry)
             bundle = st.session_state.get(f"bundle_preview_{case_id}")
             if bundle:
-                with st.expander("📦 Outbound FHIR Bundle that the EHR sent to the payer"):
-                    st.caption("This is the Da Vinci PAS Claim Bundle the doctor's EHR assembled and POSTed to /fhir/Claim/$submit.")
+                with st.expander("📦 Outbound FHIR Bundle that was sent to the payer"):
+                    st.caption(
+                        "This is the Da Vinci PAS Claim Bundle assembled from the extracted "
+                        "metadata and POSTed to /fhir/Claim/$submit. In production, the doctor's "
+                        "EHR would build this automatically."
+                    )
                     st.json(bundle)
+            if st.button("📋 View full payer detail", key=f"view_payer_{case_id}"):
+                st.query_params["case_id"] = case_id
+                st.switch_page("pages/03_payer_case_detail.py")
 
         elif stage == "failed":
             err = case.get("error_message") or "Unknown error"
             st.markdown(":red[**❌ Submission failed**]")
             st.error(err)
+            render_extracted_metadata_panel(entry)
 
         else:
-            # In-progress (received / parsing / intake / selecting / adjudicating / reviewing / building_response)
+            # In-progress
             st.markdown(f"**{label}**")
             st.progress(pct / 100, text=f"{stage.replace('_', ' ').title()} — {pct}%")
-            if stage in ("received", "parsing"):
-                st.caption("The payer has received your Bundle and is parsing it.")
+            if stage in ("extracting_metadata",):
+                st.caption("Reading the PDF and inferring CPT codes, patient info, and diagnoses.")
+            elif stage in ("received", "parsing"):
+                st.caption("The payer received your Bundle and is parsing it.")
             else:
                 st.caption(
                     "The payer is analyzing your request — extracting clinical facts, "
-                    "matching against policy criteria, and drafting a narrative review."
+                    "matching against policy criteria, drafting a narrative review."
                 )
+            render_extracted_metadata_panel(entry)
 
 
 @st.fragment(run_every=2)
 def render_submissions_list() -> None:
     subs = st.session_state.get("my_submissions", [])
     if not subs:
-        st.info("Submit a case above to see live status here.")
+        st.info("Upload a PDF above to see live status here.")
         return
     for entry in subs:
         case = fetch_case(entry["case_id"])
@@ -457,19 +299,15 @@ def main() -> None:
     st.set_page_config(page_title="Doctor Workspace", layout="wide")
     st.title("🩺 Doctor Workspace")
     st.caption(
-        "Upload a patient's clinical PDF, fill the service + coverage details, "
-        "and submit. Behind the scenes, your EHR assembles a Da Vinci PAS Claim "
-        "Bundle and POSTs it to the payer's `/fhir/Claim/$submit` endpoint. "
-        "Watch live status below."
+        "Upload a patient's clinical PDF. The system extracts patient demographics, "
+        "coverage info, ICD-10 diagnoses, and infers the requested CPT code from "
+        "clinical context. Then your EHR's FHIR Bundle is assembled and sent to "
+        "the payer. Watch live status below."
     )
 
-    policies = fetch_policies()
-
-    # Section A — submit form
     st.markdown("---")
-    render_submit_form(policies)
+    render_submit_section()
 
-    # Section B — live submissions
     st.markdown("---")
     st.subheader("📊 My submissions (live)")
     render_submissions_list()

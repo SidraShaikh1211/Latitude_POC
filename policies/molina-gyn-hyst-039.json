@@ -1,0 +1,491 @@
+{
+  "policy_id": "molina-gyn-hyst-039",
+  "name": "Hysterectomy for Endometriosis and Adenomyosis",
+  "payer_id": "molina",
+  "version": "2025-01-01",
+  "effective_from": "2025-01-01",
+  "effective_until": null,
+
+  "source": {
+    "pdf_path": "policies/sources/molina-gyn-hyst-039.pdf",
+    "total_pages": 2,
+    "publication_url": null,
+    "authority": "Oregon Health Authority — Prioritized List Guideline Note 39 (re-badged for demo as a Molina policy)"
+  },
+
+  "applies_to": {
+    "cpt_codes": [
+      "58150", "58152", "58180", "58200", "58210",
+      "58260", "58262", "58267", "58270", "58275", "58280", "58285",
+      "58290", "58291", "58292", "58293", "58294",
+      "58541", "58542", "58543", "58544", "58548",
+      "58550", "58552", "58553", "58554",
+      "58570", "58571", "58572", "58573"
+    ],
+    "hcpcs_codes": [],
+    "icd10_patterns": ["N80.*", "N94.6", "N91.*", "N92.*", "N93.*"],
+    "lines_of_business": ["medicaid", "medicare-advantage"],
+    "states": ["OR"],
+    "age_min": 18,
+    "age_max": null,
+    "settings_of_care": ["inpatient", "ambulatory-surgery-center", "outpatient"],
+    "request_categories": ["procedural"],
+    "branches": {
+      "initial": "First hysterectomy request for endometriosis or adenomyosis",
+      "repeat": "Not applicable (hysterectomy is non-repeatable)"
+    }
+  },
+
+  "criteria": {
+    "id": "root",
+    "type": "internal",
+    "operator": "ONE_OF",
+    "description": "Either Section A (endometriosis pathway) or Section B (adenomyosis pathway) must be fully met.",
+    "children": [
+
+      {
+        "id": "section_a_endometriosis",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Hysterectomy for endometriosis — all four numbered criteria must be documented.",
+        "policy_citation": {
+          "page": 1,
+          "section": "A",
+          "quote": "Hysterectomy, with or without adnexectomy, for endometriosis may be appropriate when all of the following are documented"
+        },
+        "children": [
+          {
+            "id": "section_a.A1_history",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "Patient history of (a) prior operative/histologic endometriosis diagnosis AND (b) >6 months of impactful pain.",
+            "children": [
+              {
+                "id": "section_a.A1_history.prior_op_or_histologic_diagnosis",
+                "type": "leaf",
+                "description": "Prior detailed operative description or histologic diagnosis of endometriosis.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "A.1.a",
+                  "quote": "Prior detailed operative description or histologic diagnosis of endometriosis"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["DiagnosticReport", "Procedure", "Condition"],
+                  "extraction_hints": "Look for biopsy/pathology reports (CPT 58100 endometrial biopsy, 49321 laparoscopic biopsy) with histologic diagnosis of endometriosis; or operative notes from prior laparoscopy describing endometriotic lesions.",
+                  "value_constraints": {},
+                  "evaluator_kind": "narrative_check"
+                },
+                "verdict_rubric": {
+                  "met": "Documented prior operative description OR pathology report confirming endometriosis.",
+                  "not_met": "Endometriosis only suspected clinically without operative or histologic confirmation.",
+                  "unclear": "Imaging or symptoms suggest endometriosis but the record is ambiguous on confirmatory diagnosis.",
+                  "not_documented": "No reference to prior operative or histologic workup for endometriosis."
+                }
+              },
+              {
+                "id": "section_a.A1_history.pain_6mo_qol",
+                "type": "leaf",
+                "description": "Pain for more than 6 months with negative effect on patient's quality of life.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "A.1.b",
+                  "quote": "Presence of pain for more than 6 months with negative effect on patient"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Condition", "Observation"],
+                  "extraction_hints": "Compute symptom duration from documented onset to current visit; look for QoL impact (work limitation, sleep, ADL impairment, persistent analgesic use).",
+                  "value_constraints": {"min_duration_months": 6},
+                  "evaluator_kind": "temporal_constraint"
+                },
+                "verdict_rubric": {
+                  "met": "Documented pain duration ≥6 months AND explicit QoL/functional impact statement.",
+                  "not_met": "Pain documented for <6 months OR no QoL impact mentioned.",
+                  "unclear": "Pain present but duration or QoL impact ambiguous.",
+                  "not_documented": "No pain timeline in record."
+                }
+              }
+            ]
+          },
+
+          {
+            "id": "section_a.A2_failed_3mo_trial",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "3-month therapeutic trial with BOTH hormonal therapy AND NSAIDs failed (unless contraindicated).",
+            "policy_citation": {
+              "page": 1,
+              "section": "A.2",
+              "quote": "Failure of a 3-month therapeutic trial with both of the following"
+            },
+            "children": [
+              {
+                "id": "section_a.A2.hormonal_therapy_3mo",
+                "type": "internal",
+                "operator": "ONE_OF",
+                "description": "Hormonal therapy attempted for ≥3 months — either OCP/IUD-class OR amenorrhea-inducing agent.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "A.2.a",
+                  "quote": "Hormonal therapy"
+                },
+                "children": [
+                  {
+                    "id": "section_a.A2.hormonal_therapy_3mo.ocp_or_iud",
+                    "type": "leaf",
+                    "description": "Oral contraceptive pills/patches, progesterone-containing IUDs, or injectable hormone therapy tried.",
+                    "policy_citation": {
+                      "page": 1,
+                      "section": "A.2.a.i",
+                      "quote": "Oral contraceptive pills or patches, progesterone-containing IUDs, injectable hormone therapy, or similar"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["MedicationStatement", "MedicationRequest", "Procedure"],
+                      "extraction_hints": "Use lookup_term_class with target_class=oral_contraceptive, progesterone_iud, or injectable_hormone. Includes Mirena/Kyleena/Liletta (IUD), DMPA/Depo-Provera (injectable), OCPs (ethinyl estradiol/norethindrone/drospirenone).",
+                      "value_constraints": {"min_duration_months": 3},
+                      "evaluator_kind": "class_membership"
+                    },
+                    "verdict_rubric": {
+                      "met": "Documented use of OCP, progesterone IUD, or injectable hormone for ≥3 months in the current episode.",
+                      "not_met": "Tried for <3 months OR not tried at all.",
+                      "unclear": "Class match but duration ambiguous.",
+                      "not_documented": "No mention of hormonal therapy trial."
+                    }
+                  },
+                  {
+                    "id": "section_a.A2.hormonal_therapy_3mo.gnrh_or_danazol",
+                    "type": "leaf",
+                    "description": "GnRH analogs or danazol (amenorrhea-inducing agents) tried for ≥3 months.",
+                    "policy_citation": {
+                      "page": 1,
+                      "section": "A.2.a.ii",
+                      "quote": "Agents for inducing amenorrhea"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["MedicationStatement", "MedicationRequest"],
+                      "extraction_hints": "Use lookup_term_class with target_class=gnrh_analog. Includes leuprolide (Lupron), nafarelin, goserelin (Zoladex), or danazol.",
+                      "value_constraints": {"min_duration_months": 3},
+                      "evaluator_kind": "class_membership"
+                    },
+                    "verdict_rubric": {
+                      "met": "GnRH analog or danazol used for ≥3 months.",
+                      "not_met": "Not tried, or for shorter duration.",
+                      "unclear": "Class match but duration uncertain.",
+                      "not_documented": "No mention."
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "section_a.A2.nsaids_3mo",
+                "type": "leaf",
+                "description": "NSAIDs tried for ≥3 months (concurrent with hormonal therapy).",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "A.2.b",
+                  "quote": "Nonsteroidal anti-inflammatory drugs"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["MedicationStatement", "MedicationRequest"],
+                  "extraction_hints": "lookup_term_class with target_class=NSAID. Includes ibuprofen, naproxen, celecoxib, meloxicam, diclofenac. Duration ≥3 months for the current episode.",
+                  "value_constraints": {"min_duration_months": 3},
+                  "evaluator_kind": "class_membership"
+                },
+                "verdict_rubric": {
+                  "met": "NSAID documented as used regularly for ≥3 months for endometriosis pain.",
+                  "not_met": "NSAID not tried or shorter duration.",
+                  "unclear": "NSAID present but duration unclear.",
+                  "not_documented": "No NSAID in record."
+                }
+              }
+            ]
+          },
+
+          {
+            "id": "section_a.A3_nonmalignant_cytology",
+            "type": "leaf",
+            "description": "Nonmalignant cervical cytology (Pap smear) if cervix is present.",
+            "policy_citation": {
+              "page": 1,
+              "section": "A.3",
+              "quote": "Nonmalignant cervical cytology, if cervix is present"
+            },
+            "evaluation": {
+              "fact_types_needed": ["DiagnosticReport", "Procedure"],
+              "extraction_hints": "Look for recent Pap smear (CPT 88142/88175) results — should be NILM/NEGATIVE for intraepithelial lesion or malignancy. Patients with prior supracervical hysterectomy (no cervix) automatically satisfy.",
+              "value_constraints": {},
+              "evaluator_kind": "narrative_check"
+            },
+            "verdict_rubric": {
+              "met": "Documented Pap result negative for intraepithelial lesion or malignancy, OR documented absence of cervix.",
+              "not_met": "Pap shows malignancy or high-grade dysplasia.",
+              "unclear": "Pap result mentioned but interpretation unclear.",
+              "not_documented": "No recent cervical cytology in record."
+            }
+          },
+
+          {
+            "id": "section_a.A4_negative_pregnancy",
+            "type": "leaf",
+            "description": "Negative preoperative pregnancy test (unless postmenopausal or previously sterilized).",
+            "policy_citation": {
+              "page": 1,
+              "section": "A.4",
+              "quote": "Negative preoperative pregnancy test result"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation", "Condition", "Procedure"],
+              "extraction_hints": "Look for hCG negative result, OR documented postmenopausal status, OR prior tubal ligation/sterilization (CPT 58600/58615/58671). Patient age > 55 usually implies postmenopausal.",
+              "value_constraints": {},
+              "evaluator_kind": "narrative_check"
+            },
+            "verdict_rubric": {
+              "met": "Negative hCG OR documented postmenopausal OR documented sterilization.",
+              "not_met": "Positive pregnancy test.",
+              "unclear": "Sterilization or menopausal status implied but not explicit.",
+              "not_documented": "No pregnancy test result and reproductive status unclear."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "section_b_adenomyosis",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Hysterectomy for adenomyosis — all five numbered criteria must be documented.",
+        "policy_citation": {
+          "page": 1,
+          "section": "B",
+          "quote": "Hysterectomy, with or without adnexectomy, for adenomyosis may be appropriate when all of the following are documented"
+        },
+        "children": [
+          {
+            "id": "section_b.B1_dysmenorrhea_6mo",
+            "type": "leaf",
+            "description": "Dysmenorrhea, pelvic pain, or abnormal uterine bleeding for >6 months with QoL impact.",
+            "policy_citation": {
+              "page": 1,
+              "section": "B.1",
+              "quote": "Patient history of dysmenorrhea, pelvic pain or abnormal uterine bleeding for more than six months"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Condition", "Observation"],
+              "extraction_hints": "Look for ICD-10 N94.6 (dysmenorrhea), N92.* (excessive menstruation), N93.* (other abnormal uterine bleeding), or N80.03 (adenomyosis itself). Compute symptom duration ≥6 months; look for QoL impact statement.",
+              "value_constraints": {"min_duration_months": 6},
+              "evaluator_kind": "temporal_constraint"
+            },
+            "verdict_rubric": {
+              "met": "Dysmenorrhea/pelvic pain/AUB documented ≥6 months AND QoL impact mentioned.",
+              "not_met": "Duration <6 months.",
+              "unclear": "Duration ambiguous.",
+              "not_documented": "No symptom history."
+            }
+          },
+
+          {
+            "id": "section_b.B2_failed_6mo_trial",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "6-month therapeutic trial with hormonal therapy AND NSAIDs failed (unless contraindicated).",
+            "policy_citation": {
+              "page": 1,
+              "section": "B.2",
+              "quote": "Failure of a six-month therapeutic trial with both of the following"
+            },
+            "children": [
+              {
+                "id": "section_b.B2.hormonal_therapy_6mo",
+                "type": "internal",
+                "operator": "ONE_OF",
+                "description": "Hormonal therapy attempted for ≥6 months — either OCP/IUD-class OR amenorrhea-inducing agent.",
+                "children": [
+                  {
+                    "id": "section_b.B2.hormonal_therapy_6mo.ocp_or_iud",
+                    "type": "leaf",
+                    "description": "Oral contraceptive pills/patches, progesterone-containing IUDs, or injectable hormone therapy tried for ≥6 months.",
+                    "policy_citation": {
+                      "page": 1,
+                      "section": "B.2.a.i",
+                      "quote": "Oral contraceptive pills or patches, progesterone-containing IUDs, injectable hormone therapy, or similar"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["MedicationStatement", "MedicationRequest", "Procedure"],
+                      "extraction_hints": "Use lookup_term_class oral_contraceptive/progesterone_iud/injectable_hormone. Mirena IUD insertion (CPT 58300) or DMPA injection counts. Duration ≥6 months.",
+                      "value_constraints": {"min_duration_months": 6},
+                      "evaluator_kind": "class_membership"
+                    },
+                    "verdict_rubric": {
+                      "met": "OCP, progesterone IUD, or DMPA used for ≥6 months in the current episode.",
+                      "not_met": "Tried for <6 months.",
+                      "unclear": "Class match but duration ambiguous.",
+                      "not_documented": "Not mentioned."
+                    }
+                  },
+                  {
+                    "id": "section_b.B2.hormonal_therapy_6mo.gnrh_or_danazol",
+                    "type": "leaf",
+                    "description": "GnRH analogs or danazol tried for ≥6 months.",
+                    "policy_citation": {
+                      "page": 1,
+                      "section": "B.2.a.ii",
+                      "quote": "Agents for inducing amenorrhea"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["MedicationStatement", "MedicationRequest"],
+                      "extraction_hints": "lookup_term_class gnrh_analog. Leuprolide, nafarelin, goserelin, danazol. Duration ≥6 months.",
+                      "value_constraints": {"min_duration_months": 6},
+                      "evaluator_kind": "class_membership"
+                    },
+                    "verdict_rubric": {
+                      "met": "GnRH analog/danazol for ≥6 months.",
+                      "not_met": "Shorter duration or not tried.",
+                      "unclear": "Duration uncertain.",
+                      "not_documented": "Not mentioned."
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "section_b.B2.nsaids_6mo",
+                "type": "leaf",
+                "description": "NSAIDs tried for ≥6 months (concurrent with hormonal therapy).",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "B.2.b",
+                  "quote": "Nonsteroidal anti-inflammatory drugs"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["MedicationStatement", "MedicationRequest"],
+                  "extraction_hints": "lookup_term_class NSAID. Ibuprofen, naproxen, celecoxib, meloxicam, diclofenac. Duration ≥6 months.",
+                  "value_constraints": {"min_duration_months": 6},
+                  "evaluator_kind": "class_membership"
+                },
+                "verdict_rubric": {
+                  "met": "NSAID regularly used for ≥6 months.",
+                  "not_met": "Shorter duration or not tried.",
+                  "unclear": "Duration ambiguous.",
+                  "not_documented": "No NSAID in record."
+                }
+              }
+            ]
+          },
+
+          {
+            "id": "section_b.B3_imaging",
+            "type": "internal",
+            "operator": "ONE_OF",
+            "description": "Imaging confirms adenomyosis — either endovaginal US OR MRI finding.",
+            "children": [
+              {
+                "id": "section_b.B3.endovaginal_us",
+                "type": "leaf",
+                "description": "Endovaginal ultrasound suspicious for adenomyosis (abnormal hypoechoic myometrial echogenicity OR small myometrial cysts).",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "B.3.a",
+                  "quote": "abnormal hypoechoic myometrial echogenicity or presence of small myometrial cysts"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["DiagnosticReport", "Observation"],
+                  "extraction_hints": "Look for endovaginal ultrasound report (CPT 76830). Find phrases: 'heterogeneous myometrium', 'hypoechoic', 'myometrial cysts', 'suggestive of adenomyosis', 'asymmetric myometrial thickening'.",
+                  "value_constraints": {},
+                  "evaluator_kind": "diagnosis_with_objective_evidence"
+                },
+                "verdict_rubric": {
+                  "met": "US report explicitly notes hypoechoic myometrial echogenicity, myometrial cysts, or 'suggestive of adenomyosis'.",
+                  "not_met": "US performed but normal myometrium.",
+                  "unclear": "US findings ambiguous (e.g., 'heterogeneous myometrium' without further specifics).",
+                  "not_documented": "No endovaginal US in record."
+                }
+              },
+              {
+                "id": "section_b.B3.mri_junctional_zone",
+                "type": "leaf",
+                "description": "MRI showing junctional zone thickening > 12 mm.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "B.3.b",
+                  "quote": "MRI showing thickening of the junctional zone > 12 mm"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["DiagnosticReport"],
+                  "extraction_hints": "Look for pelvic MRI report (CPT 74181, 74182, 74183). Quote the junctional zone measurement in mm.",
+                  "value_constraints": {"min_junctional_zone_mm": 12},
+                  "evaluator_kind": "numeric_threshold"
+                },
+                "verdict_rubric": {
+                  "met": "MRI report explicitly measures junctional zone >12 mm.",
+                  "not_met": "MRI report measures JZ ≤12 mm.",
+                  "unclear": "MRI mentioned but JZ measurement missing.",
+                  "not_documented": "No MRI report."
+                }
+              }
+            ]
+          },
+
+          {
+            "id": "section_b.B4_nonmalignant_cytology",
+            "type": "leaf",
+            "description": "Nonmalignant cervical cytology (Pap smear) if cervix is present.",
+            "policy_citation": {
+              "page": 1,
+              "section": "B.4",
+              "quote": "Nonmalignant cervical cytology, if cervix is present"
+            },
+            "evaluation": {
+              "fact_types_needed": ["DiagnosticReport", "Procedure"],
+              "extraction_hints": "Pap smear (CPT 88142/88175). NILM/NEGATIVE result. If prior supracervical hyst, no cervix.",
+              "value_constraints": {},
+              "evaluator_kind": "narrative_check"
+            },
+            "verdict_rubric": {
+              "met": "Pap negative OR no cervix.",
+              "not_met": "Pap shows malignancy/high-grade dysplasia.",
+              "unclear": "Pap done but interpretation unclear.",
+              "not_documented": "No cytology in record."
+            }
+          },
+
+          {
+            "id": "section_b.B5_negative_pregnancy",
+            "type": "leaf",
+            "description": "Negative preoperative pregnancy test (unless postmenopausal or previously sterilized).",
+            "policy_citation": {
+              "page": 1,
+              "section": "B.5",
+              "quote": "Negative preoperative pregnancy test"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation", "Condition", "Procedure"],
+              "extraction_hints": "Negative hCG OR postmenopausal OR prior tubal ligation/sterilization (CPT 58600/58615/58671). Age >55 usually postmenopausal.",
+              "value_constraints": {},
+              "evaluator_kind": "narrative_check"
+            },
+            "verdict_rubric": {
+              "met": "Negative hCG OR documented postmenopausal OR documented prior sterilization.",
+              "not_met": "Positive pregnancy test.",
+              "unclear": "Reproductive status implied but not explicit.",
+              "not_documented": "Not addressed."
+            }
+          }
+        ]
+      }
+    ]
+  },
+
+  "exclusions": [],
+
+  "metadata": {
+    "authored_by": "system",
+    "authored_at": "2026-05-23",
+    "review_status": "draft",
+    "source_notes": "Adapted from Oregon Health Authority Prioritized List Guideline Note 39 (Lines 1,392). Re-badged as a Molina policy per demo simplification — single insurer with multiple policies.",
+    "test_cases": ["case_welsh_001"],
+    "operator_coverage": {
+      "ALL": "section_a, section_a.A1_history, section_a.A2_failed_3mo_trial, section_b, section_b.B2_failed_6mo_trial",
+      "ONE_OF": "root, section_a.A2.hormonal_therapy_3mo, section_b.B2.hormonal_therapy_6mo, section_b.B3_imaging",
+      "NOT": "no exclusions in source policy",
+      "AT_LEAST_K": "not exercised by this policy"
+    }
+  }
+}

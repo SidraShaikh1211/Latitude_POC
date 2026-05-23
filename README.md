@@ -1,8 +1,12 @@
 # PA Prototype — Prior Authorization Prototype
 
-A payer-side prior-authorization decision-support prototype built for the PA Prototype senior-engineer coding assessment. Accepts Da Vinci PAS Claim Bundles, extracts citation-grounded FHIR resources via Claude, evaluates against the Molina ESI policy (~30 criteria), runs per-criterion adjudication with a 5-tool agent, and returns a Da Vinci PAS ClaimResponse Bundle with a clinician-readable narrative and refined missing-info requests.
+A payer-side prior-authorization decision-support prototype built for the PA Prototype senior-engineer coding assessment. A doctor uploads a single clinical PDF; the system extracts all needed structured fields (CPT, ICD-10, patient demographics, insurance) from the document, assembles a Da Vinci PAS Claim Bundle, routes to the matching policy out of several loaded policies, adjudicates each criterion against the patient's record, and returns a determination (approve / pend / deny) with a clinician-readable narrative and actionable missing-information requests.
 
-**Keystone case:** the David Smith ESI submission (CPT 62323 on Molina Medicaid NY) produces `pend` with two actionable info requests, exactly as a well-designed system should — a naive yes/no system gets this wrong.
+**Two keystone cases, one pipeline:**
+- **David Smith** (pain management, NY) — submits a chronic low-back-pain fax bundle requesting lumbar interlaminar ESI. Routes to the Molina ESI policy → **pend** with PT-documentation gaps.
+- **Catherine Welsh** (gyn, OR) — submits an EMR chart export requesting total laparoscopic hysterectomy for adenomyosis. Routes to the Molina hysterectomy policy → **pend** with hormonal-therapy/imaging documentation gaps.
+
+Both cases enter the system the **same way** — a doctor uploads the PDF, nothing else. The metadata extractor reads the chart and infers everything (including CPT codes from clinical context: "Will proceed with TLH, BS, cysto" → CPT 58571). No hardcoded patient data in the pipeline.
 
 ---
 
@@ -10,10 +14,10 @@ A payer-side prior-authorization decision-support prototype built for the PA Pro
 
 | # | Brief requirement | How it's implemented |
 |---|---|---|
-| 1 | Ingestion of synthetic / de-identified clinical notes | `app/extraction/pdf.py` (PyMuPDF text + offsets) + `scripts/seed_smith_case.py` (builds a Da Vinci PAS Bundle wrapping the David Smith PDF as DocumentReference + Binary). Real-world fax artifacts (zero-width spaces, smart quotes) handled in `app/llm/citation_verify.py`. |
-| 2 | **AI-Powered FHIR Structuring (MCP-aligned)** | `app/extraction/intake.py` uses Claude structured-output (via tool-use coercion) to turn unstructured PDFs into Patient / Conditions / Observations / MedicationRequests / Procedures / AllergyIntolerances / DiagnosticReports, each with verbatim source citations. Every citation is substring-verified against the source PDF (`app/llm/citation_verify.py`); resources with failed citations are dropped. MCP server (`app/mcp_server/server.py`) exposes `extract_clinical_facts`, `evaluate_prior_auth`, and resource URIs (`policy://`, `case://`) so an MCP client (Claude Desktop) can drive the same backend. |
-| 3 | **Document Comparison for Coverage (A2A simulation)** | `policies/molina-mcp-032.json` is the criteria tree (22 leaves + 10 exclusions) authored against the Molina ESI MCP-032 policy. `app/policy/registry.py` loads + substring-verifies every quote at startup (fail-loud on miss). `app/policy/selector.py` is the deterministic policy selector (CPT / ICD-10 glob / payer / LOB / state / age / care-setting filter + specificity disambiguation + branch determination from prior Procedure resources in the Bundle). `app/policy/adjudicator.py` is the per-criterion Claude agent (5-tool surface, parallel via `asyncio.gather`, prompt-cached). `POST /fhir/Claim/$submit` is the A2A endpoint that closes the loop: in goes a Da Vinci PAS Claim Bundle, out comes a PAS ClaimResponse Bundle. |
-| 4 | Prototype: citations + criteria + insight + production roadmap | Streamlit UI (`frontend/`) shows structured FHIR with `[p.N]` text-excerpt expanders, criteria tree with verdict badges (✅ / ❌ / 🟡 / 📭), determination outcome + Reviewer narrative + missing-info requests, and the raw outbound PAS Bundle. The Reviewer agent (`app/determination/reviewer.py`, also 5 tools) produces clinician-readable narratives that quote the policy by section + patient evidence by document + date. Production evolution is in the *Roadmap* section below. |
+| 1 | **Ingestion of synthetic / de-identified clinical notes** | `app/extraction/pdf.py` (PyMuPDF text + offsets) handles two real document formats: fax bundles (Smith — 23 pages with fax headers, smart-quote artifacts) and EMR exports (Welsh — 15 pages of structured Epic-style encounters). Real-world PDF artifacts (zero-width spaces, smart quotes, inline ICD-10 codes like `ADENOMYOSIS (N80.03)`) handled in `app/llm/citation_verify.py`. |
+| 2 | **AI-Powered FHIR Structuring (MCP-aligned)** | Two-stage LLM extraction. (a) `app/extraction/metadata.py` runs **before** Bundle assembly — Claude structured-output infers `SubmissionData` (CPT, ICD-10, patient, coverage) from the PDF, including CPT inference from clinical context when no code is written. (b) `app/extraction/intake.py` runs **after** Bundle parsing — Claude structured-output turns the same PDF into Patient / Conditions / Observations / Medications / Procedures / Allergies / DiagnosticReports with verbatim citations. Every citation is substring-verified against the source PDF (`app/llm/citation_verify.py`); resources with failed citations are dropped. The MCP server (`app/mcp_server/server.py`) exposes the same backend over stdio. |
+| 3 | **Document Comparison for Coverage (A2A simulation)** | Two policies loaded from `policies/*.json` (ESI + hysterectomy) — `app/policy/registry.py` substring-verifies all 61 quotes at startup (fail-loud on miss). `app/policy/selector.py` is the deterministic policy selector — filters by CPT, ICD-10 glob, payer, LOB, state, age, care-setting, then resolves ties by specificity score. `app/policy/adjudicator.py` is the per-criterion Claude agent (5-tool surface, parallel via `asyncio.gather`, prompt-cached). The A2A endpoint `POST /fhir/Claim/$submit` accepts a Bundle and returns a Da Vinci PAS `ClaimResponse` Bundle. A doctor-facing endpoint `POST /v1/doctor/submit` accepts a raw PDF and does the same. |
+| 4 | **Prototype: citations + criteria + insight + production roadmap** | Streamlit UI (`frontend/`) with two roles. **Doctor workspace** — drop a PDF, watch live status (📋 Reading PDF → 📨 Payer received → 🔍 Analysis in progress → outcome), then see the brief Reviewer narrative + missing-info requests + extracted-metadata transparency panel + outbound Bundle. **Payer inbox + case detail** — three-panel workspace with structured FHIR + criteria tree (verdict badges, expandable per-criterion: policy quote + patient evidence quote + reasoning) + determination. Production-evolution section below. |
 
 ---
 
@@ -23,16 +27,16 @@ The brief includes a 15-step clinical-review checklist (`clinical_pdfs/Clinical 
 
 | Step | Component |
 |---|---|
-| 1. Confirm the request | `app/pas/bundle_parser.py::parse_pas_bundle` → `CaseContext` (CPT, ICD-10, payer, LOB, state, age, service date, urgency, care setting) |
-| 2. Identify guideline/policy | `app/policy/selector.py::select_policy` (deterministic filter chain) |
+| 1. Confirm the request | `app/extraction/metadata.py::extract_submission_metadata` reads the PDF; `app/pas/bundle_parser.py::parse_pas_bundle` extracts `CaseContext` from the assembled Bundle |
+| 2. Identify guideline/policy | `app/policy/selector.py::select_policy` (deterministic filter chain across all loaded policies) |
 | 3. Classify request type (initial / repeat) | `app/policy/selector.py::_determine_branch` (reads prior `Procedure` resources from the Bundle) |
 | 4. Review clinical documentation | `app/extraction/intake.py::run_intake` (Claude structured-output → FHIR with citations) |
-| 5. Validate diagnosis + indication | Adjudicator on `indication.initial_injection.diagnosis_supported.*` leaves (uses `lookup_term_class` tool: `M54.16 ∈ lumbar_radiculopathy`) |
-| 6. Severity + functional impact | Adjudicator on `severity.nrs_above_4` and `severity.adl_impact` (uses `check_temporal_constraint` for thresholds) |
-| 7. Prior treatments / conservative therapy | Adjudicator on `conservative_therapy.failure.{pt.*, activity_modification, drug_therapy}` (uses `lookup_term_class` for NSAID class membership) |
+| 5. Validate diagnosis + indication | Adjudicator on diagnosis-supported leaves (uses `lookup_term_class` tool: `M54.16 ∈ lumbar_radiculopathy`, `N80.03 ∈ adenomyosis`) |
+| 6. Severity + functional impact | Adjudicator on severity leaves (NRS thresholds, pain-duration temporal checks, QoL impact narrative) |
+| 7. Prior treatments / conservative therapy | Adjudicator on conservative-therapy subtrees (uses `lookup_term_class` for NSAID family, hormonal-therapy umbrella, GnRH analogs, IUDs) |
 | 8. Objective evidence | Adjudicator hard constraint in `skills/pa-adjudicator/SKILL.md`: `met` verdict requires Observation / DiagnosticReport / quoted exam finding |
-| 9. Frequency / dosage / setting | Adjudicator on `frequency_and_location.frequency_within_limits.*` (uses `check_temporal_constraint` against prior Procedures) |
-| 10. Exclusions / contraindications | `policies/molina-mcp-032.json` exclusions array (10 entries: myofascial, non-radicular, pregnancy, anticoagulation, infection, etc.) evaluated independently |
+| 9. Frequency / dosage / setting | Adjudicator on frequency leaves (uses `check_temporal_constraint` against prior Procedures) |
+| 10. Exclusions / contraindications | Per-policy `exclusions` arrays (ESI has 10 named exclusions; gyn policy has implicit gating via ONE_OF) |
 | 11. Compare evidence vs criteria | `app/determination/rollup.py` (four-valued logic, all 4 operators) |
 | 12. Identify missing information | `app/determination/reviewer.py` (uses `draft_clinician_question` tool to refine into single-response requests) |
 | 13. Make/recommend determination | `app/determination/decider.py` (exclusion short-circuit + outcome mapping + escalation routing) |
@@ -44,46 +48,68 @@ The brief includes a 15-step clinical-review checklist (`clinical_pdfs/Clinical 
 ## Architecture
 
 ```
-POST /fhir/Claim/$submit  (inbound Da Vinci PAS Bundle)
-  │
-  ▼
-bundle_parser  →  CaseContext  +  FactCollection (current + prior facts)
-  │
-  ▼ (if Bundle has DocumentReference+Binary PDFs)
-intake (Claude structured-output)  →  ExtractedFacts with citations
-  │
-  ▼
-policy selector (deterministic)
-  │  filter: payer → effective date → CPT → ICD-10 glob →
-  │           LOB → state → age → care setting → request category
-  │  rank: specificity score (narrower CPT scope dominates)
-  │  branch: prior Procedure in scope → repeat else initial
-  ▼
-adjudicator (Claude agent, 5 tools, parallel per leaf, prompt-cached)
-  │  tools: search_facts_by_type · get_document_excerpt ·
-  │          check_temporal_constraint · lookup_term_class ·
-  │          request_human_review
-  │  output: CriterionVerdict {met/not_met/unclear/not_documented,
-  │           confidence, patient_evidence[], reasoning, missing_info[]}
-  ▼
-rollup (deterministic)
-  │  ALL / ONE_OF / NOT / AT_LEAST_K  →  root verdict
-  ▼
-decider
-  │  exclusion short-circuit  →  outcome (approve/deny/pend/needs_human_review)
-  ▼
-reviewer (Claude agent, 5 tools)
-  │  tools: get_policy_section · get_patient_facts · get_document_excerpt ·
-  │          draft_clinician_question · flag_for_human_review
-  │  output: narrative + refined missing-info + escalation flag
-  ▼
-bundle_builder  →  Da Vinci PAS ClaimResponse Bundle
+                       Doctor uploads a PDF (no form fields)
+                                  │
+                                  ▼
+POST /v1/doctor/submit   (or POST /fhir/Claim/$submit for an already-assembled Bundle)
+                                  │
+                                  ▼
+       ┌──────────────────────────────────────────────────────────┐
+       │  metadata extractor  (Claude structured-output)          │
+       │    reads PDF text + infers SubmissionData                │
+       │    • Patient: name, DOB, gender, state (from clinic loc) │
+       │    • Coverage: payer, member ID, LOB, plan               │
+       │    • Service: CPT (inferred from clinical context),      │
+       │               DOS, ICD-10 codes (primary + secondary),   │
+       │               body site                                  │
+       └──────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                       bundle_constructor builds
+                       Da Vinci PAS Claim Bundle
+                                  │
+                                  ▼
+       bundle_parser  →  CaseContext  +  FactCollection (current + prior facts)
+                                  │
+                                  ▼  (if Bundle has DocumentReference+Binary PDFs)
+       intake (Claude structured-output)  →  ExtractedFacts with citations
+                                  │
+                                  ▼
+       policy selector (deterministic)
+         │  filter: payer → effective date → CPT → ICD-10 glob →
+         │           LOB → state → age → care setting → request category
+         │  rank: specificity score (narrower CPT scope dominates)
+         │  branch: prior Procedure in scope → repeat else initial
+         ▼
+       adjudicator (Claude agent, 5 tools, parallel per leaf, prompt-cached)
+         │  tools: search_facts_by_type · get_document_excerpt ·
+         │          check_temporal_constraint · lookup_term_class ·
+         │          request_human_review
+         │  output: CriterionVerdict {met/not_met/unclear/not_documented,
+         │           confidence, patient_evidence[], reasoning, missing_info[]}
+         ▼
+       rollup (deterministic)
+         │  ALL / ONE_OF / NOT / AT_LEAST_K  →  root verdict
+         ▼
+       decider
+         │  exclusion short-circuit  →  outcome (approve/deny/pend/needs_human_review)
+         ▼
+       reviewer (Claude agent, 5 tools)
+         │  tools: get_policy_section · get_patient_facts · get_document_excerpt ·
+         │          draft_clinician_question · flag_for_human_review
+         │  output: narrative + refined missing-info + escalation flag
+         ▼
+       bundle_builder  →  Da Vinci PAS ClaimResponse Bundle
+                                  │
+                                  ▼
+                  Returned to doctor's UI + persisted to SQLite
 ```
 
-**Two external surfaces, one backend:**
-- REST API (FastAPI, "API-first") — `POST /fhir/Claim/$submit` + convenience `/v1/*` endpoints
+**External surfaces, one backend:**
+- REST API (FastAPI) — `POST /fhir/Claim/$submit` (A2A entry, accepts a Bundle), `POST /v1/doctor/submit` (PDF-only doctor entry), `/v1/cases/*` and `/v1/policies/*` convenience endpoints
 - MCP server (stdio, Claude Desktop compatible) — 6 tools, 3 prompts, 2 URI schemes
 - A2A Agent Card at `/.well-known/agent.json`
+- Streamlit UI with role picker → Doctor Workspace or Payer Inbox + Detail
 
 ---
 
@@ -91,15 +117,15 @@ bundle_builder  →  Da Vinci PAS ClaimResponse Bundle
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Backend | FastAPI + Pydantic + uvicorn | Pydantic integrates with FHIR shapes; async-native for parallel LLM I/O; OpenAPI free at `/docs` |
+| Backend | FastAPI + Pydantic + uvicorn | Pydantic integrates with FHIR shapes; async-native for parallel LLM I/O; OpenAPI free at `/docs`; native multipart for PDF uploads |
 | FHIR | `fhir.resources` 8.2 (R4B) | R4 shape validation without HAPI overhead |
-| LLM | `anthropic` SDK, `claude-sonnet-4-6` | Cost/capability balance; prompt caching for ~80% reduction on cacheable portions |
+| LLM | `anthropic` SDK, `claude-sonnet-4-6` | Cost/capability balance; prompt caching for ~80% reduction on cacheable portions; tool-use for structured-output coercion |
 | MCP | official `mcp` Python package | stdio transport mounted as `python -m app.mcp_server.server` |
-| PDF | `pymupdf` | Citation needs page coordinates; no OCR fallback for this prototype (Smith PDF is text-extractable, verified Day 1) |
-| DB | SQLite + SQLAlchemy + aiosqlite (WAL mode) | Sufficient for prototype; Postgres is a one-line swap for production |
-| UI | Streamlit (text-excerpt citations) | Fast iteration; no PDF iframe (deliberately avoided per design notes — fragile Streamlit components risk) |
+| PDF | `pymupdf` | Citation needs page coordinates; no OCR fallback (both test PDFs text-extract cleanly) |
+| DB | SQLite + SQLAlchemy + aiosqlite (WAL mode) | Sufficient for prototype; Postgres is a one-line swap |
+| UI | Streamlit (text-excerpt citations) | Fast iteration; no PDF iframe (deliberately avoided); `@st.fragment(run_every=2)` for live status polling |
 | Logging | `structlog` (JSON) | Distributed-trace-friendly out of the box |
-| Tests | `pytest` + `pytest-asyncio` | 131 tests across unit + integration + 4-level eval pyramid |
+| Tests | `pytest` + `pytest-asyncio` | 149 unit + integration + L0/L1 eval tests; 16 LLM-gated for L2/L3 |
 
 ---
 
@@ -107,17 +133,18 @@ bundle_builder  →  Da Vinci PAS ClaimResponse Bundle
 
 These were considered and explicitly cut to fit the prototype scope. Each is one PR away from being added:
 
-- **HAPI FHIR server** — `fhir.resources` is sufficient for R4 shape validation; HAPI is needed only for FHIR persistence + IG profile validation in production.
-- **Da Vinci PAS IG profile validation** — base R4 shape only. Production would add `fhir-validator` or HAPI's profile validator.
-- **CQL execution** — the criteria tree + per-leaf LLM adjudication is equivalent for the prototype timeline.
-- **X12 278** — CMS-0057-F enforcement discretion makes FHIR-only legitimate.
-- **CDS Hooks / CRD** — upstream of the demo.
-- **US Core profile validation** — base R4 sufficient for prototype.
-- **OAuth / SMART on FHIR** — mock with API keys in `.env`.
-- **OCR fallback** — Smith PDF text-extracts cleanly; not needed for the keystone case.
-- **React UI** — Streamlit is faster to iterate and the demo doesn't need SPA polish.
-- **Deployment (Fly.io / Cloud Run)** — local-only by design; deploy is one Dockerfile away.
-- **Langfuse / OpenTelemetry** — structlog JSON logs + `Usage` accounting are enough for this scope.
+- **HAPI FHIR server** — `fhir.resources` is sufficient for R4 shape validation
+- **Da Vinci PAS IG profile validation** — base R4 shape only
+- **CQL execution** — the criteria tree + per-leaf LLM adjudication is equivalent
+- **X12 278** — CMS-0057-F enforcement discretion makes FHIR-only legitimate
+- **CDS Hooks / CRD** — upstream of the demo
+- **US Core profile validation** — base R4 sufficient
+- **OAuth / SMART on FHIR** — mock with API keys in `.env`
+- **OCR fallback** — both test PDFs text-extract cleanly
+- **React UI** — Streamlit is faster to iterate
+- **Deployment (Fly.io / Cloud Run)** — local-only by design; deploy is one Dockerfile away
+- **Langfuse / OpenTelemetry** — structlog JSON logs + `Usage` accounting are enough for this scope
+- **Pre-baked fixtures** — every case enters via the live PDF→extractor→bundle path; there are no hardcoded patient bundles
 
 ---
 
@@ -132,41 +159,62 @@ Latitude_POC/
 ├── app/
 │   ├── main.py                            FastAPI entry; mounts /v1/* + /fhir/* + /.well-known/agent.json
 │   ├── settings.py                        pydantic-settings
-│   ├── orchestrator.py                    end-to-end pipeline (shared by REST + MCP)
-│   ├── api/                               REST endpoints (cases, policies, fhir_pas, a2a)
+│   ├── orchestrator.py                    end-to-end pipeline (shared by REST + MCP + seed)
+│   ├── api/
+│   │   ├── doctor.py                      POST /v1/doctor/submit  (PDF-only doctor entry; metadata extracted at runtime)
+│   │   ├── fhir_pas.py                    POST /fhir/Claim/$submit  (A2A entry; pre-assembled Bundle)
+│   │   ├── cases.py                       GET /v1/cases · GET /v1/cases/{id}  (incl. processing_stage + extracted_facts)
+│   │   ├── policies.py                    GET /v1/policies · GET /v1/policies/{id}
+│   │   └── a2a.py                         GET /.well-known/agent.json
 │   ├── mcp_server/server.py               MCP stdio server (6 tools, 3 prompts, 2 URI schemes)
-│   ├── extraction/                        PDF + intake (Claude structured-output)
-│   ├── policy/                            registry, selector, tree dataclasses, term_class, adjudicator, tools
-│   ├── determination/                     rollup, decider, reviewer
-│   ├── pas/                               bundle_parser (inbound), bundle_builder (outbound)
+│   ├── extraction/
+│   │   ├── pdf.py                         PyMuPDF wrapper (deterministic, no LLM)
+│   │   ├── metadata.py                    Claude → SubmissionData (CPT/ICD-10 inference)  ← runs BEFORE bundle assembly
+│   │   └── intake.py                      Claude → FHIR resources w/ citations  ← runs AFTER bundle parse
+│   ├── policy/
+│   │   ├── registry.py                    loads policies/*.json + substring-verifies every quote
+│   │   ├── selector.py                    deterministic match (payer, CPT, ICD-10, state, age, ...)
+│   │   ├── tree.py                        ALL / ONE_OF / NOT / AT_LEAST_K dataclasses
+│   │   ├── adjudicator.py                 per-criterion Claude agent (5 tools, parallel)
+│   │   ├── tools.py                       adjudicator tool implementations
+│   │   └── term_class.py                  synonym/class dictionary (NSAIDs, hormonal therapy, ICD-10 groupings)
+│   ├── determination/
+│   │   ├── rollup.py                      deterministic four-valued logic
+│   │   ├── decider.py                     exclusion short-circuit → outcome
+│   │   └── reviewer.py                    narrative + missing-info Claude agent
+│   ├── pas/
+│   │   ├── bundle_parser.py               inbound Bundle → CaseContext + facts
+│   │   ├── bundle_constructor.py          SubmissionData → outbound Bundle (used by doctor flow)
+│   │   └── bundle_builder.py              determination → ClaimResponse Bundle
 │   ├── models/                            SQLAlchemy ORM (Case, Document, Policy, Verdict, AuditLog)
 │   ├── db/                                async engine (WAL), repositories
 │   └── llm/                               Anthropic client wrapper (caching, agent loop), citation_verify
 ├── skills/
-│   ├── pa-intake/SKILL.md                 system prompt for the intake agent
+│   ├── pa-metadata-extractor/SKILL.md     system prompt for the PDF→SubmissionData extractor
+│   ├── pa-intake/SKILL.md                 system prompt for the FHIR-extraction intake agent
 │   ├── pa-adjudicator/SKILL.md            system prompt for the per-criterion adjudicator
 │   └── pa-reviewer/SKILL.md               system prompt for the reviewer
 ├── policies/
-│   ├── molina-mcp-032.json                22 tree leaves + 10 exclusions (44 verified citations)
-│   └── sources/molina-mcp-032.pdf         canonical policy source
+│   ├── molina-mcp-032.json                ESI policy — 22 leaves + 10 exclusions (44 verified citations)
+│   ├── molina-gyn-hyst-039.json           Hysterectomy policy — 15 leaves + ONE_OF(SectionA, SectionB), 17 verified citations
+│   └── sources/                           canonical PDF sources (citation verification targets)
 ├── frontend/
-│   ├── app.py                             landing page (policies + health check)
+│   ├── app.py                             landing — role picker + loaded policies summary
 │   └── pages/
-│       ├── 01_inbox.py                    case list
-│       └── 02_case_detail.py              three-panel workspace
+│       ├── 01_doctor_workspace.py         PDF upload + live status + brief outcome (no form fields)
+│       ├── 02_payer_inbox.py              case list with status badges
+│       └── 03_payer_case_detail.py        three-panel workspace (FHIR + criteria tree + determination)
 ├── tests/
-│   ├── unit/                              108 unit tests
+│   ├── unit/                              ~115 unit tests (synthetic Bundles, no fixture dependency)
 │   ├── integration/                       end-to-end snapshot tests
 │   ├── evals/
 │   │   ├── level0_citation/               every quote substring-verifies (CI gate)
-│   │   ├── level1_selector/               15 selector cases
-│   │   ├── level2_criteria/               criterion eval (synonyms, temporal, exclusions)
-│   │   └── level3_e2e/                    Smith + synthetic cases
-│   └── fixtures/
-│       ├── smith_claim_bundle.json        the inbound Smith PAS Bundle (3.3 MB)
-│       └── ...
+│   │   ├── level1_selector/               15 selector cases (auto-generated)
+│   │   ├── level2_criteria/               criterion eval (synonyms, temporal, exclusions; LLM-gated)
+│   │   └── level3_e2e/                    Smith PDF → extractor → pipeline (LLM-gated; honest path)
+│   └── fixtures/                          (no pre-baked patient bundles — fixtures are constructed inline by tests)
 └── scripts/
-    ├── seed_smith_case.py                 build Smith fixture + run e2e + persist
+    ├── seed_smith_case.py                 ingest any PDF via the doctor flow (default: Smith) → persist
     └── run_evals.py                       run all 4 eval levels with metrics
 ```
 
@@ -179,78 +227,129 @@ Latitude_POC/
 cp .env.example .env                            # paste your ANTHROPIC_API_KEY
 .venv/bin/pip install -r requirements.txt       # or `make install`
 
-# Generate the Smith fixture, run the pipeline, persist to SQLite (~3-4 min, ~$1 in API)
-make seed
+# Seed a case (default: Smith) via the doctor flow (~3-4 min, ~$1-2 in API)
+make seed                                       # uses clinical_pdfs/David_Smith_Clinical.pdf
+# OR: seed any other PDF:
+# .venv/bin/python -m scripts.seed_smith_case --pdf path/to/some.pdf --case-id custom-001
 
-# Terminal A: start the FastAPI backend (also serves OpenAPI at /docs and MCP info)
+# Terminal A — backend (FastAPI on :8000, /docs, MCP info)
 make run
 
-# Terminal B: start the Streamlit UI
-make ui                                         # open http://localhost:8501
+# Terminal B — UI
+make ui                                         # http://localhost:8501
 
-# Run the test suite
-make test                                       # unit + integration + L0/L1 evals
+# Run tests
+make test                                       # 149 tests + 16 LLM-gated skipped
 ```
 
-**Demo flow:**
-1. Open http://localhost:8501 → see "API connected" + loaded policy summary.
-2. Click **Inbox** → see the Smith case with status badge.
-3. Click **Open Case Detail** → three-panel layout:
-   - **Left:** structured FHIR (Patient, Conditions, Observations, Medications, Procedures) with `[p.N]` expanders showing the cited source quote.
-   - **Right:** criteria tree with verdict badges. Click any leaf to see policy citation, adjudicator reasoning, patient evidence quoted verbatim from the PDF.
-   - **Below:** determination outcome (🟡 PENDED), Reviewer narrative, missing-info requests, raw outbound PAS ClaimResponse Bundle.
-4. Try the API directly:
-   ```bash
-   curl -X POST http://localhost:8000/fhir/Claim/\$submit \
-        -H "Content-Type: application/json" \
-        -d @tests/fixtures/smith_claim_bundle.json
-   ```
-5. Try the MCP server (from Claude Desktop config):
-   ```json
-   { "mcpServers": { "latitude-pa": {
-       "command": "/Users/.../.venv/bin/python",
-       "args": ["-m", "app.mcp_server.server"]
-   } } }
-   ```
-   Then ask Claude: *"Evaluate Smith's PA case and show me the missing-info requests."*
+### Demo flow A — Doctor (the realistic flow)
+
+1. http://localhost:8501 → **🩺 Doctor** card → Doctor Workspace
+2. **Drop any clinical PDF** into the uploader (Smith / Welsh / your own). No form fields.
+3. Click **📤 Submit to Payer**
+4. Watch the spinner: *"Reading your PDF and extracting metadata..."* (~10-15s)
+5. The submission response shows you what the extractor pulled — patient name, DOB, CPT (with the reasoning for any inferred values), ICD-10 codes. You can verify it before the slow pipeline takes over.
+6. The status card updates live every 2 seconds:
+   - 📋 Reading your PDF → 📨 Payer received request → 🔍 Request analysis in progress → ✅ outcome
+7. When complete, you see:
+   - **Outcome badge**: 🟢 APPROVED / 🟡 PENDED / 🔴 DENIED / 🟣 NEEDS HUMAN REVIEW
+   - **Reviewer narrative** (1-2 paragraphs, brief, references the policy by section)
+   - **Missing-information requests** if pended (each answerable in a single provider response)
+   - **What we extracted from the PDF** expander
+   - **Outbound FHIR Bundle** expander (the wire format an EHR would receive)
+   - **📋 View full payer detail** link → jumps to the payer's case-detail page
+
+### Demo flow B — Payer (criteria-tree drill-down)
+
+1. http://localhost:8501 → **🏥 Payer** card → Inbox
+2. Click any case → three-panel workspace
+3. **Left:** structured FHIR (intake-extracted) with `[p.N]` expanders showing the cited source text
+4. **Right:** criteria tree with verdict badges — click any leaf for policy citation + adjudicator reasoning + patient evidence quoted verbatim
+5. **Below:** outcome + Reviewer narrative + missing-info + raw outbound PAS Bundle
+
+### Demo flow C — Pure REST / API-first
+
+```bash
+# PDF-only doctor submission
+curl -X POST http://localhost:8000/v1/doctor/submit \
+  -F "pdf=@clinical_pdfs/David_Smith_Clinical.pdf"
+# Returns: {case_id, processing_stage: "received", extracted_metadata, bundle_preview}
+# Then poll: curl http://localhost:8000/v1/cases/<case_id>
+
+# A2A entry (pre-assembled Bundle — what a real EHR would POST)
+curl -X POST http://localhost:8000/fhir/Claim/\$submit \
+     -H "Content-Type: application/json" \
+     -d @my_constructed_bundle.json
+# Returns: ClaimResponse Bundle (synchronous)
+```
+
+### Demo flow D — MCP (Claude Desktop)
+
+```json
+{
+  "mcpServers": {
+    "latitude-pa": {
+      "command": "/absolute/path/to/Latitude_POC/.venv/bin/python",
+      "args": ["-m", "app.mcp_server.server"],
+      "cwd": "/absolute/path/to/Latitude_POC"
+    }
+  }
+}
+```
+
+Then ask Claude: *"Evaluate the latest PA case and show me the missing-info requests."* Claude will call `list_cases` → `get_case` and surface the determination.
 
 ---
 
-## What the Smith case demonstrates
+## The two keystone cases
 
-David Smith, 50yo male, Molina Medicaid NY. Requesting CPT 62323 (lumbar interlaminar ESI with imaging guidance), primary diagnosis M54.16, with M79.18 (myalgia) and M47.816 (lumbar spondylosis) also on the visit-diagnoses list. Clinical documentation shows:
+### Case 1 — David Smith (ESI for back pain, NY → routes to molina-mcp-032)
 
-- NRS 9/10 pain, chronic LBP with bilateral radiation
-- NSAIDs (ibuprofen), Tylenol, cyclobenzaprine all tried
-- PT was prescribed (20 visits over 10 weeks) but PT eval notes "too painful to start"
+50yo male, Molina Medicaid NY. Fax bundle requesting CPT 62323 (lumbar interlaminar ESI). Primary M54.16 (radiculopathy), with M79.18 (myalgia) and M47.816 (spondylosis) also on visit-diagnoses. NRS 9/10 pain, NSAIDs + Tylenol + cyclobenzaprine + gabapentin tried, PT prescribed but eval notes "too painful to start."
 
-**Expected outcome (and what the system produces):** `pend`. The naive interpretation might approve (radicular diagnosis present, severity high, multiple medications tried) or deny (myofascial code present, PT not completed). A well-designed system identifies the ambiguity:
-- Conservative therapy is incomplete: NSAIDs OK, but PT was planned-not-completed, and the contraindication-with-imaging pathway requires explicit documentation that wasn't supplied.
-- The myofascial exclusion (M79.18) appears in visit diagnoses but the PA was filed under M54.16. The adjudicator correctly determined the *primary* indication is radicular (not myofascial), so the exclusion doesn't fire — but the Reviewer can still ask for explicit confirmation.
+**System routes to** `molina-mcp-032` (Molina ESI policy, NY footprint, CPT 62323 covered, ICD-10 M54.* matches `applies_to`).
 
-The Reviewer's narrative quotes the case verbatim ("too painful to start") and references the policy by section ("Molina MCP-032, Coverage Policy page 2"). The missing-info requests are answerable in a single provider response each.
+**Outcome:** `pend`. The naive interpretation might approve (radicular diagnosis, severity high, multiple medications) or deny (myofascial code present, PT not completed). The system identifies:
+- Conservative therapy incomplete (PT planned-not-completed)
+- Reviewer asks for documentation of either completed PT or imaging-correlation contraindication rationale
+
+### Case 2 — Catherine Welsh (hysterectomy for adenomyosis, OR → routes to molina-gyn-hyst-039)
+
+55yo female, Oregon Medicaid (re-badged Molina for demo). Epic-style chart export. **No CPT written anywhere in the document.** Patient diagnoses include N80.03 (adenomyosis), N94.6 (dysmenorrhea), I26.99 (PE), D68.59 (Protein S deficiency). Tried Mirena IUD (painful intercourse), DMPA (side effects), ibuprofen 800mg TID. US shows "heterogeneous myometrium, suggestive of possible adenomyosis." Plan: "Will proceed with TLH, BS, cysto" buried in Encounter #4 Assessment & Plan.
+
+**Metadata extractor infers** CPT 58571 (total laparoscopic hysterectomy with removal of tubes/ovaries) from the "TLH, BS, cysto" phrasing — citing the page in `extraction_notes`. State inferred as OR from "Womens Health Center of Southern Oregon" and "Medford, OR" lab addresses.
+
+**System routes to** `molina-gyn-hyst-039` (Hysterectomy policy, OR footprint, CPT 58571 in covered list, ICD-10 N80.03 matches `N80.*`).
+
+**Outcome:** `pend` (Section B adenomyosis pathway). Reviewer asks for:
+- Duration confirmation of hormonal therapy trial
+- Pharmacy refill records confirming continuous NSAID use
+- MRI report with junctional zone measurement (the policy accepts either US "suggestive of adenomyosis with hypoechoic myometrium" OR MRI with junctional zone >12mm; the US wording was ambiguous)
+
+**Both cases route correctly and produce honest pend outcomes** based only on what the metadata extractor pulled from their PDFs. No hardcoded patient data anywhere.
 
 ---
 
 ## Testing
 
 ```bash
-make test                                       # 131 tests
-.venv/bin/pytest tests/unit/ -v                 # 108 unit tests
+make test                                       # 149 tests + 16 LLM-gated skipped
+.venv/bin/pytest tests/unit/ -v                 # unit tests
 .venv/bin/pytest tests/evals/level0_citation/   # citation faithfulness gate
 .venv/bin/pytest tests/evals/level1_selector/   # 15 selector cases
+RUN_LLM_EVALS=1 make eval                       # full pyramid incl. L2/L3 (LLM cost ~$2-10)
 ```
 
 **Eval pyramid summary:**
 
 | Level | What | Cases | Pass target |
 |---|---|---|---|
-| L0 | Citation faithfulness (substring-verify every quote) | 44 (every quote in every policy) | 100% |
+| L0 | Citation faithfulness (substring-verify every quote across both policies) | 61 (44 ESI + 17 hyst) | 100% |
 | L1 | Policy selector | 15 attribute-cross-product cases | ≥98% |
-| L2 | Per-criterion adjudication | ~8 illustrative + extensible | ≥92% on clear cases |
-| L3 | End-to-end determination | Smith + extensible synthetic cases | ≥85% exact match |
+| L2 | Per-criterion adjudication | ~14 illustrative + extensible | ≥92% on clear cases |
+| L3 | End-to-end determination | Smith PDF via real extractor (no fixture) | Smith pends with PT/imaging info requests |
 
-L2 and L3 cases call the Claude API; budget ~$0.10–$1 per case depending on tool-loop iterations.
+L2 and L3 cases call the Claude API; budget ~$0.10–$2 per case depending on tool-loop iterations.
 
 ---
 
@@ -259,24 +358,29 @@ L2 and L3 cases call the Claude API; budget ~$0.10–$1 per case depending on to
 What this prototype shows about how the design would evolve toward production use:
 
 1. **FHIR APIs at scale** — `/fhir/Claim/$submit` is the contract. To productionize: add HAPI FHIR persistence (so `Claim` and `ClaimResponse` resources are addressable by ID), wire SMART-on-FHIR / OAuth client credentials, add IG profile validation (Da Vinci PAS, US Core).
-2. **A2A endpoints** — `/.well-known/agent.json` advertises capabilities today. Production would add JWT-bearer auth, rate limiting, signed responses (FHIR Verifiable Credentials), and an outbound webhook channel for asynchronous determinations on long-running cases.
-3. **MCP orchestration** — the MCP server today exposes the backend over stdio. Production paths: (a) Streamable HTTP transport mounted on FastAPI for remote clients, (b) per-payer policy registries via additional MCP servers federated under one root, (c) MCP prompts that walk a clinician through case-construction.
-4. **Adjudicator iteration** — the agent's tool calls and verdicts are persisted in `audit_log` for replay. Production would: ingest these into Langfuse / OpenTelemetry for fleet-level evaluation, run per-policy CI on every policy JSON edit, and use thumbs-up/down feedback from medical directors to fine-tune the Reviewer system prompt.
-5. **Policy authoring** — `policies/*.json` is hand-authored today, with `pdftotext + grep` validation. Production would add: (a) a policy authoring UI for clinical analysts (not engineers), (b) automated re-authoring when source PDFs are republished, (c) versioning + A/B testing across policy versions.
-6. **Performance** — Smith case end-to-end runs in ~4 minutes today, ~$1 in API. With prompt caching properly warmed and the adjudicator iteration budget tuned, the same case should run in ~60–90 seconds at ~$0.20. Production gains come from: longer cache TTLs (Anthropic supports beta long-TTL caching), batching adjudication calls, and running the deterministic pieces first to skip LLM calls when verdicts are unambiguous.
+2. **A2A endpoints** — `/.well-known/agent.json` advertises capabilities today. Production would add JWT-bearer auth, rate limiting, signed responses (FHIR Verifiable Credentials), and an outbound webhook channel for asynchronous determinations.
+3. **MCP orchestration** — the MCP server today exposes the backend over stdio. Production paths: (a) Streamable HTTP transport for remote clients, (b) per-payer policy registries federated under one root, (c) MCP prompts that walk a clinician through case-construction.
+4. **Adjudicator iteration** — the agent's tool calls and verdicts are persisted in `audit_log` for replay. Production would ingest these into Langfuse / OpenTelemetry, run per-policy CI on every policy JSON edit, and use medical-director feedback to fine-tune the Reviewer.
+5. **Policy authoring** — `policies/*.json` is hand-authored today, with substring-grep validation. Production would add: (a) a policy authoring UI for clinical analysts (not engineers), (b) automated re-authoring when source PDFs are republished, (c) versioning + A/B testing across policy versions.
+6. **Multi-payer** — currently both policies are tagged as Molina for demo simplicity. The selector already supports multi-payer; production would load each real payer's policy library and route via `Coverage.payor` from the inbound Bundle.
+7. **Performance** — End-to-end runs in 100s-230s today (~$1.5-2 per case). With prompt caching properly warmed, the adjudicator iteration budget tuned, and the deterministic pieces gating LLM calls more aggressively, the same case should run in 60-90 seconds at ~$0.30.
 
 ---
 
 ## Honest limitations
 
-- **Cost per case** is currently ~$1 for the Smith case (above the $0.30 design target). The adjudicator hit max-iterations on 5 leaves on the first run; with the now-implemented retry guidance + iteration budget bump (5 → 8) + intake JSON-coercion fix, repeat runs should drop to ~$0.30–0.50.
-- **Intake citation pass rate** was 97.2% on the first Smith run (2 of 72 citations dropped due to PDF artifacts — smart-quote in `M54.‘1 6`, missing string for myofascial). Production would add OCR fallback + character-class normalization to push this to 100%.
-- **AT_LEAST_K operator** is implemented and unit-tested but not exercised by the Molina policy (no natural "at least 2 of 3 evidence types" criterion in the source text). Documented as `reserved` in policy metadata.
+- **Cost per case** is $1.5-2 (above the $0.30 design target). The adjudicator hits max-iterations on hard leaves; with iteration budget tuning and longer cache TTLs it should drop to ~$0.50.
+- **Intake citation pass rate** is ~95-98% on real PDFs (PDF artifacts like smart-quotes and zero-width spaces cause occasional drops). Production would add OCR fallback + character-class normalization to push to 100%.
+- **AT_LEAST_K operator** is implemented and unit-tested but not currently exercised by either loaded policy (no natural "at least 2 of N" criterion in the source texts). Reserved for future policies.
 - **Streamable HTTP MCP** would be a nice-to-have over the current stdio-only transport. The agent loop architecture doesn't change; only the transport wrapper.
-- **One policy** loaded. Adding policies is a JSON-file drop; the selector eval (S11, S12) already proves multi-policy disambiguation works.
+- **Two policies loaded.** Adding more is a JSON-file drop into `policies/`. The selector eval (cases S11, S12) already proves multi-policy disambiguation works.
+- **Payer is hardcoded to "molina"** in the metadata extractor default when no insurance info is in the PDF. Production would route based on real `Coverage.payor` from the EHR submission.
 
 ---
 
 ## License + credits
 
-Built for the PA Prototype senior-engineer coding assessment, May 2026. The Molina ESI Clinical Policy MCP-032 (August 2024 version) is publicly available at Molina's clinical policy library; the David Smith PDF was provided as part of the assessment.
+Built for the PA Prototype senior-engineer coding assessment, May 2026.
+- The Molina ESI Clinical Policy MCP-032 (August 2024) is from Molina's public clinical policy library.
+- The hysterectomy policy is adapted from Oregon Health Authority Prioritized List Guideline Note 39 (re-badged as a Molina policy for demo simplicity — single insurer with multiple policies).
+- Both patient PDFs (David Smith, Catherine Welsh) were provided as part of the assessment materials.
