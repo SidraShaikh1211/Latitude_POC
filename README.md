@@ -23,7 +23,7 @@ Both cases enter the system the **same way** — a doctor uploads the PDF, nothi
 
 ## The 15-step clinical review workflow
 
-The brief includes a 15-step clinical-review checklist (`clinical_pdfs/Clinical review steps.pdf`). Every step maps to a concrete component:
+The brief includes a 15-step clinical-review checklist (the *Clinical review steps* PDF from the assessment package; `clinical_pdfs/` is gitignored — see "Demo PDFs" below). Every step maps to a concrete component:
 
 | Step | Component |
 |---|---|
@@ -222,14 +222,20 @@ Latitude_POC/
 
 ## Running it
 
+> ⚠️ **Clinical PDFs are not in the repo.** The `clinical_pdfs/` folder is
+> gitignored (assessment materials aren't redistributable). Before running
+> `make seed` or the doctor-UI demo, you need to obtain or supply your own
+> clinical PDFs and place them locally — see "Demo PDFs" below.
+
 ```bash
 # One-time setup
 cp .env.example .env                            # paste your ANTHROPIC_API_KEY
 .venv/bin/pip install -r requirements.txt       # or `make install`
 
-# Seed a case (default: Smith) via the doctor flow (~3-4 min, ~$1-2 in API)
-make seed                                       # uses clinical_pdfs/David_Smith_Clinical.pdf
-# OR: seed any other PDF:
+# Seed a case via the doctor flow (~3-4 min, ~$1-2 in API).
+# Default path is clinical_pdfs/David_Smith_Clinical.pdf — pass --pdf to override.
+make seed
+# OR: any other PDF:
 # .venv/bin/python -m scripts.seed_smith_case --pdf path/to/some.pdf --case-id custom-001
 
 # Terminal A — backend (FastAPI on :8000, /docs, MCP info)
@@ -241,6 +247,21 @@ make ui                                         # http://localhost:8501
 # Run tests
 make test                                       # 149 tests + 16 LLM-gated skipped
 ```
+
+### Demo PDFs
+
+The repo doesn't ship the patient or source-policy PDFs (they came with the
+Latitude assessment package and aren't republished). To run the full demo:
+
+1. Place your `David_Smith_Clinical.pdf` and `Catherine Welsh MR.pdf` (or
+   any other clinical PDFs you want to test) inside `clinical_pdfs/`.
+2. The two **policy** JSONs (`molina-mcp-032.json`, `molina-gyn-hyst-039.json`)
+   are tracked, and their **source PDFs** are in `policies/sources/` (also
+   tracked) — so policy loading + citation verification works on a fresh clone.
+3. Without `clinical_pdfs/David_Smith_Clinical.pdf`, `make seed` errors
+   with `PDF not found`. Either supply one or use `--pdf <some-other.pdf>`.
+4. The doctor UI's file uploader works with **any** clinical PDF — drop in
+   your own and the metadata extractor will infer the fields.
 
 ### Demo flow A — Doctor (the realistic flow)
 
@@ -270,9 +291,9 @@ make test                                       # 149 tests + 16 LLM-gated skipp
 ### Demo flow C — Pure REST / API-first
 
 ```bash
-# PDF-only doctor submission
+# PDF-only doctor submission (supply your own PDF path)
 curl -X POST http://localhost:8000/v1/doctor/submit \
-  -F "pdf=@clinical_pdfs/David_Smith_Clinical.pdf"
+  -F "pdf=@path/to/clinical_document.pdf"
 # Returns: {case_id, processing_stage: "received", extracted_metadata, bundle_preview}
 # Then poll: curl http://localhost:8000/v1/cases/<case_id>
 
