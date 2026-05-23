@@ -1,0 +1,941 @@
+{
+  "policy_id": "molina-mcp-032",
+  "name": "Epidural Steroid Injections for Back and Neck Pain",
+  "payer_id": "molina",
+  "version": "2024-08-14",
+  "effective_from": "2024-08-14",
+  "effective_until": null,
+
+  "source": {
+    "pdf_path": "policies/sources/molina-mcp-032.pdf",
+    "total_pages": 8,
+    "publication_url": null,
+    "authority": "Molina Healthcare"
+  },
+
+  "applies_to": {
+    "cpt_codes": ["62320", "62321", "62322", "62323", "64479", "64480", "64483", "64484"],
+    "hcpcs_codes": [],
+    "icd10_patterns": ["M54.*", "M51.*", "M48.0*", "M47.2*", "M50.*", "G89.21", "G89.29", "B02.2*", "G54.*", "M96.1*"],
+    "lines_of_business": ["medicaid", "medicare-advantage"],
+    "states": ["NY", "NJ", "CA", "TX", "FL", "MI", "OH", "WA", "UT", "ID", "NM"],
+    "age_min": 18,
+    "age_max": null,
+    "settings_of_care": ["outpatient", "ambulatory-surgery-center", "office"],
+    "request_categories": ["procedural"],
+    "branches": {
+      "initial": "First or diagnostic injection (up to 2 injections per region)",
+      "repeat": "Repeat therapeutic injection — requires documented prior response of ≥50% pain relief"
+    }
+  },
+
+  "criteria": {
+    "id": "root",
+    "type": "internal",
+    "operator": "ALL",
+    "description": "Medical necessity criteria for ESI: eligibility AND indication AND frequency/location appropriate.",
+    "policy_citation": {
+      "page": 2,
+      "section": "Coverage Policy",
+      "quote": "ALL the following criteria are met"
+    },
+    "children": [
+
+      {
+        "id": "eligibility",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Patient eligibility (age).",
+        "children": [
+          {
+            "id": "eligibility.age_18_plus",
+            "type": "leaf",
+            "description": "Patient is 18 years of age or older at the requested service date.",
+            "policy_citation": {
+              "page": 2,
+              "section": "Coverage Policy",
+              "quote": "adults who are age 18 years or older"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Patient"],
+              "extraction_hints": "Read Patient.birthDate; compute age at service date.",
+              "value_constraints": { "age_min": 18 },
+              "evaluator_kind": "numeric_threshold"
+            },
+            "verdict_rubric": {
+              "met": "Patient's age at the requested service date is ≥18 years.",
+              "not_met": "Patient's age at the requested service date is <18 years.",
+              "unclear": "Patient.birthDate present but service date is missing or ambiguous.",
+              "not_documented": "Patient.birthDate is not present in the case."
+            }
+          }
+        ]
+      },
+
+      {
+        "id": "indication",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "ESI indications: choose initial-injection subtree (branch=initial) or repeat-injection subtree (branch=repeat). The selector pre-selects the branch; the adjudicator evaluates the corresponding subtree.",
+        "policy_citation": {
+          "page": 2,
+          "section": "Coverage Policy",
+          "quote": "Indications are met for ESI as indicated by ONE of the following"
+        },
+        "children": [
+
+          {
+            "id": "indication.initial_injection",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "Initial (diagnostic) injection criteria — ALL must be met.",
+            "policy_citation": {
+              "page": 2,
+              "section": "Coverage Policy",
+              "quote": "For Initial (Diagnostic) injection(s) up to 2 injections, ALL the following are met"
+            },
+            "children": [
+
+              {
+                "id": "indication.initial_injection.diagnosis_supported",
+                "type": "internal",
+                "operator": "ONE_OF",
+                "description": "History, physical exam, and imaging support ONE of the qualifying indications.",
+                "policy_citation": {
+                  "page": 2,
+                  "section": "Coverage Policy",
+                  "quote": "History, physical examination, and radiologic imaging supports ONE of the following"
+                },
+                "children": [
+                  {
+                    "id": "indication.initial_injection.diagnosis_supported.radicular_pain",
+                    "type": "leaf",
+                    "description": "Cervical, thoracic, or lumbar radicular pain, radiculopathy, or neurogenic claudication (lumbar) documented and supported by H&P and imaging.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Cervical, thoracic, or lumbar radicular pain, radiculopathy, or neurogenic claudication (lumbar)"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Condition", "Observation", "DiagnosticReport"],
+                      "extraction_hints": "Look for ICD-10 codes in M54.1x (radiculopathy), M54.3x-M54.4x (sciatica), M48.06x (lumbar stenosis with neurogenic claudication), or M50.1x (cervical disc with radiculopathy). Confirm with exam findings (dermatomal sensory loss, motor weakness, positive straight-leg raise) and imaging correlation (MRI, CT).",
+                      "value_constraints": {
+                        "icd10_qualifying_patterns": ["M54.1*", "M54.3*", "M54.4*", "M50.1*", "M48.06*", "G54.*"]
+                      },
+                      "evaluator_kind": "diagnosis_with_objective_evidence"
+                    },
+                    "verdict_rubric": {
+                      "met": "Documented radiculopathy / radicular pain / neurogenic claudication AND supporting exam finding OR imaging finding cited in the record.",
+                      "not_met": "Pain is documented as non-radicular, axial, or myofascial only — no radicular features.",
+                      "unclear": "Radicular language used but objective evidence (exam or imaging) is missing or contradictory; or only diagnosis code present without supporting clinical detail.",
+                      "not_documented": "No discussion of radicular pain / radiculopathy / neurogenic claudication in the available record."
+                    }
+                  },
+                  {
+                    "id": "indication.initial_injection.diagnosis_supported.post_surgical_6mo",
+                    "type": "leaf",
+                    "description": "Post-surgical neck or back pain (e.g., post-laminectomy syndrome) where at least 6 months have elapsed since the prior spine surgery.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Post-surgical neck or back pain (example, post laminectomy syndrome) due to prior surgery (example, discectomy, laminectomy, or spinal fusion) and at least 6 months have elapsed since surgery"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Procedure", "Condition", "Observation"],
+                      "extraction_hints": "Look for prior Procedure resources (laminectomy CPT 63030, 63042; discectomy 63020, 63030; spinal fusion 22612, 22630, 22633) with performed dates. Compute time elapsed from procedure to ESI request date. Look for ICD-10 M96.1 (post-laminectomy syndrome).",
+                      "value_constraints": { "min_months_since_surgery": 6 },
+                      "evaluator_kind": "temporal_constraint"
+                    },
+                    "verdict_rubric": {
+                      "met": "Prior spine surgery documented AND ≥6 months have elapsed between surgery date and ESI request date.",
+                      "not_met": "Prior spine surgery documented but <6 months elapsed, OR no relevant spine surgery in history.",
+                      "unclear": "Prior surgery mentioned but date is ambiguous or missing.",
+                      "not_documented": "No prior spine surgery present in the record."
+                    }
+                  },
+                  {
+                    "id": "indication.initial_injection.diagnosis_supported.herpes_zoster",
+                    "type": "leaf",
+                    "description": "Acute pain associated with herpes zoster (shingles).",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Acute pain associated with herpes zoster"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Condition", "Observation"],
+                      "extraction_hints": "Look for ICD-10 B02.* (herpes zoster) or clinical narrative referencing shingles, post-herpetic neuralgia, or dermatomal vesicular rash.",
+                      "value_constraints": { "icd10_qualifying_patterns": ["B02.*"] },
+                      "evaluator_kind": "diagnosis_code"
+                    },
+                    "verdict_rubric": {
+                      "met": "ICD-10 B02.* present, OR clinical narrative explicitly references active herpes zoster pain.",
+                      "not_met": "No herpes zoster mentioned in case.",
+                      "unclear": "Ambiguous language (e.g., 'rash' without zoster context).",
+                      "not_documented": "Not addressed in available record."
+                    }
+                  }
+                ]
+              },
+
+              {
+                "id": "indication.initial_injection.severity",
+                "type": "internal",
+                "operator": "ALL",
+                "description": "Pain severity and functional impact — both required.",
+                "children": [
+                  {
+                    "id": "indication.initial_injection.severity.nrs_above_4",
+                    "type": "leaf",
+                    "description": "Pain on the Numerical Rating Scale is greater than 4.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Pain that affects activity of daily living functional ability (Greater than4 on the Numerical Rating Scale"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Observation"],
+                      "extraction_hints": "Look for pain-score Observations (LOINC 38208-5 'Pain severity NRS' or text like 'NRS 8/10', 'pain 9/10', 'pain rating: 7'). The policy threshold is strictly >4 (i.e., 5 or higher).",
+                      "value_constraints": { "nrs_min_exclusive": 4 },
+                      "evaluator_kind": "numeric_threshold"
+                    },
+                    "verdict_rubric": {
+                      "met": "Documented NRS pain score >4 within the current episode of pain.",
+                      "not_met": "Documented NRS pain score ≤4.",
+                      "unclear": "Pain described qualitatively ('severe', 'disabling') without a numeric score, or score is inconsistent across visits.",
+                      "not_documented": "No pain score (numeric or qualitative) found."
+                    }
+                  },
+                  {
+                    "id": "indication.initial_injection.severity.adl_impact",
+                    "type": "leaf",
+                    "description": "Pain documented to affect activities of daily living (ADL) functional ability.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Pain that affects activity of daily living functional ability"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Observation", "Condition"],
+                      "extraction_hints": "Look for narrative documenting interference with ADLs: walking, standing, sitting tolerance, sleep, work, dressing, bathing. Functional measures (Oswestry Disability Index, RMDQ) when present support this leaf.",
+                      "value_constraints": {},
+                      "evaluator_kind": "functional_impact"
+                    },
+                    "verdict_rubric": {
+                      "met": "Specific ADL or functional limitation explicitly documented (e.g., 'unable to walk more than X minutes', 'cannot work', 'sleep disturbed by pain', ODI score, RMDQ score).",
+                      "not_met": "Documentation explicitly states no functional limitation.",
+                      "unclear": "Subjective complaints of pain without functional context.",
+                      "not_documented": "No discussion of functional impact in the available record."
+                    }
+                  }
+                ]
+              },
+
+              {
+                "id": "indication.initial_injection.conservative_therapy",
+                "type": "internal",
+                "operator": "ONE_OF",
+                "description": "Patient has tried and failed conservative therapy, OR conservative therapy is contraindicated, OR (for herpes zoster) waiting period is inappropriate.",
+                "policy_citation": {
+                  "page": 2,
+                  "section": "Coverage Policy",
+                  "quote": "Member has tried and failed conservative therapy or conservative therapy is contraindicated"
+                },
+                "children": [
+
+                  {
+                    "id": "indication.initial_injection.conservative_therapy.failure",
+                    "type": "internal",
+                    "operator": "ALL",
+                    "description": "Failure of conservative therapy — ALL three (PT, activity modification, drug therapy) must be documented.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Failure of conservative therapy (example, for the current episode of pain) that includes ALL of the following"
+                    },
+                    "children": [
+
+                      {
+                        "id": "indication.initial_injection.conservative_therapy.failure.pt",
+                        "type": "internal",
+                        "operator": "ALL",
+                        "description": "Physical therapy meeting duration, frequency, and total-sessions requirements.",
+                        "policy_citation": {
+                          "page": 2,
+                          "section": "Coverage Policy",
+                          "quote": "Physical therapy for a minimum of 4 weeks (3to4times per week for a total of 12 sessions)"
+                        },
+                        "children": [
+                          {
+                            "id": "indication.initial_injection.conservative_therapy.failure.pt.duration_4_weeks",
+                            "type": "leaf",
+                            "description": "PT duration is at least 4 weeks.",
+                            "policy_citation": {
+                              "page": 2,
+                              "section": "Coverage Policy",
+                              "quote": "Physical therapy for a minimum of 4 weeks"
+                            },
+                            "evaluation": {
+                              "fact_types_needed": ["Procedure", "ServiceRequest", "MedicationStatement"],
+                              "extraction_hints": "Look for PT-related CPT codes (97110, 97140, 97530, 97112) or narrative mentioning physical therapy with start and end dates. Compute duration in weeks.",
+                              "value_constraints": { "min_duration_weeks": 4 },
+                              "evaluator_kind": "temporal_constraint"
+                            },
+                            "verdict_rubric": {
+                              "met": "PT episode spans ≥4 weeks (documented start and end dates, or stated duration).",
+                              "not_met": "PT episode documented to span <4 weeks.",
+                              "unclear": "PT prescribed/planned but duration cannot be determined from documentation; or contradicting durations across notes.",
+                              "not_documented": "No PT trial in the available record."
+                            }
+                          },
+                          {
+                            "id": "indication.initial_injection.conservative_therapy.failure.pt.frequency_3_4_per_week",
+                            "type": "leaf",
+                            "description": "PT attendance frequency is 3–4 sessions per week.",
+                            "policy_citation": {
+                              "page": 2,
+                              "section": "Coverage Policy",
+                              "quote": "3to4times per week for a total of 12 sessions"
+                            },
+                            "evaluation": {
+                              "fact_types_needed": ["Procedure", "ServiceRequest"],
+                              "extraction_hints": "Look for narrative like '3x/week', '3 sessions per week', or visit logs spanning the documented PT episode.",
+                              "value_constraints": { "min_frequency_per_week": 3, "max_frequency_per_week": 4 },
+                              "evaluator_kind": "temporal_constraint"
+                            },
+                            "verdict_rubric": {
+                              "met": "PT documented at 3–4 sessions per week.",
+                              "not_met": "PT documented at <3 or >4 sessions per week.",
+                              "unclear": "PT planned but actual attendance frequency not documented.",
+                              "not_documented": "No PT trial in the available record."
+                            }
+                          },
+                          {
+                            "id": "indication.initial_injection.conservative_therapy.failure.pt.sessions_12_total",
+                            "type": "leaf",
+                            "description": "PT completed total of at least 12 sessions.",
+                            "policy_citation": {
+                              "page": 2,
+                              "section": "Coverage Policy",
+                              "quote": "a total of 12 sessions"
+                            },
+                            "evaluation": {
+                              "fact_types_needed": ["Procedure"],
+                              "extraction_hints": "Count documented PT visits/sessions in the relevant episode. Therapy notes, billing records, or summary statements ('completed 12 sessions') support this.",
+                              "value_constraints": { "min_total_sessions": 12 },
+                              "evaluator_kind": "numeric_count"
+                            },
+                            "verdict_rubric": {
+                              "met": "≥12 PT sessions documented in the current episode.",
+                              "not_met": "<12 PT sessions documented (including 0 if PT was planned but never attended).",
+                              "unclear": "PT planned but session count cannot be determined.",
+                              "not_documented": "No PT trial in the available record."
+                            }
+                          }
+                        ]
+                      },
+
+                      {
+                        "id": "indication.initial_injection.conservative_therapy.failure.activity_modification_6_weeks",
+                        "type": "leaf",
+                        "description": "Activity modification for at least 6 weeks.",
+                        "policy_citation": {
+                          "page": 2,
+                          "section": "Coverage Policy",
+                          "quote": "Activity modification for a minimum of 6 weeks"
+                        },
+                        "evaluation": {
+                          "fact_types_needed": ["Observation", "Procedure"],
+                          "extraction_hints": "Look for narrative about activity modification, ergonomic adjustments, work restrictions, rest, avoidance of aggravating activities — with a documented duration of ≥6 weeks.",
+                          "value_constraints": { "min_duration_weeks": 6 },
+                          "evaluator_kind": "temporal_constraint"
+                        },
+                        "verdict_rubric": {
+                          "met": "Activity modification documented for ≥6 weeks.",
+                          "not_met": "Activity modification documented for <6 weeks.",
+                          "unclear": "Activity modification mentioned without duration.",
+                          "not_documented": "No activity modification mentioned."
+                        }
+                      },
+
+                      {
+                        "id": "indication.initial_injection.conservative_therapy.failure.drug_therapy",
+                        "type": "leaf",
+                        "description": "Drug therapy tried — any one of: NSAIDs, muscle relaxants, corticosteroids, antidepressants, anticonvulsants, opiates.",
+                        "policy_citation": {
+                          "page": 2,
+                          "section": "Coverage Policy",
+                          "quote": "Drug therapy (example, N S A I D S, muscle relaxants, corticosteroids, antidepressants, anticonvulsants, and/or opiates)"
+                        },
+                        "evaluation": {
+                          "fact_types_needed": ["MedicationRequest", "MedicationStatement"],
+                          "extraction_hints": "Use lookup_term_class to map medication names to classes (NSAID, muscle relaxant, corticosteroid, antidepressant, anticonvulsant, opiate). Common NSAIDs: ibuprofen, naproxen, celecoxib, meloxicam, diclofenac. Acetaminophen is NOT in the NSAID class but is an analgesic. Topical agents (lidocaine patch, capsaicin) may also be relevant adjuncts.",
+                          "value_constraints": {
+                            "qualifying_classes": ["NSAID", "muscle_relaxant", "corticosteroid_oral", "antidepressant", "anticonvulsant", "opiate"]
+                          },
+                          "evaluator_kind": "class_membership"
+                        },
+                        "verdict_rubric": {
+                          "met": "At least one medication from any qualifying class documented as tried within the current episode.",
+                          "not_met": "Medications were tried but none belong to any of the qualifying classes.",
+                          "unclear": "Medication name ambiguous, or class membership cannot be resolved.",
+                          "not_documented": "No medications mentioned in the record."
+                        }
+                      }
+                    ]
+                  },
+
+                  {
+                    "id": "indication.initial_injection.conservative_therapy.contraindicated",
+                    "type": "internal",
+                    "operator": "ALL",
+                    "description": "Conservative therapy is contraindicated due to acute radicular pain with imaging correlation — both the radicular finding and the rationale for skipping conservative therapy must be documented.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Cervical, thoracic, or lumbar radicular pain with demonstrable correlation on physical exam"
+                    },
+                    "children": [
+                      {
+                        "id": "indication.initial_injection.conservative_therapy.contraindicated.imaging_correlation",
+                        "type": "leaf",
+                        "description": "Radicular pain with demonstrable correlation on physical exam and/or imaging.",
+                        "policy_citation": {
+                          "page": 2,
+                          "section": "Coverage Policy",
+                          "quote": "Cervical, thoracic, or lumbar radicular pain with demonstrable correlation on physical exam"
+                        },
+                        "evaluation": {
+                          "fact_types_needed": ["DiagnosticReport", "Observation", "Condition"],
+                          "extraction_hints": "Look for MRI or CT report describing disc herniation, foraminal stenosis, nerve root compression at a level matching the patient's dermatomal symptoms. Match imaging findings to clinical exam (e.g., L4-L5 disc herniation with L5 radiculopathy on exam).",
+                          "value_constraints": {},
+                          "evaluator_kind": "diagnosis_with_objective_evidence"
+                        },
+                        "verdict_rubric": {
+                          "met": "Imaging report documents a finding (disc herniation, foraminal stenosis, nerve compression) at a level that corresponds with the patient's clinical radicular distribution.",
+                          "not_met": "Imaging documented but does not show correlation, OR no relevant imaging.",
+                          "unclear": "Imaging mentioned but correlation to clinical findings is ambiguous.",
+                          "not_documented": "No imaging report in the available record."
+                        }
+                      },
+                      {
+                        "id": "indication.initial_injection.conservative_therapy.contraindicated.rationale_documented",
+                        "type": "leaf",
+                        "description": "Documentation explicitly explains why conservative therapy (PT, activity modification, drugs) is contraindicated.",
+                        "policy_citation": {
+                          "page": 2,
+                          "section": "Coverage Policy",
+                          "quote": "There must be documentation submitted that explains why any of the above conservative therapy is contraindicated"
+                        },
+                        "evaluation": {
+                          "fact_types_needed": ["Observation", "Condition"],
+                          "extraction_hints": "Look for narrative such as 'PT not tolerated', 'too painful for PT', 'patient unable to participate', 'acute disabling pain precluding therapy', 'worsening pain with PT'. The contraindication must be tied to the patient's clinical status, not patient preference alone.",
+                          "value_constraints": {},
+                          "evaluator_kind": "narrative_check"
+                        },
+                        "verdict_rubric": {
+                          "met": "Provider explicitly documents clinical rationale for skipping conservative therapy.",
+                          "not_met": "Conservative therapy was skipped without documented rationale.",
+                          "unclear": "Some statement of difficulty but rationale incomplete (e.g., 'too painful to start PT' alone — patient-reported preference vs. clinical contraindication).",
+                          "not_documented": "No statement about why conservative therapy was not tried."
+                        }
+                      }
+                    ]
+                  },
+
+                  {
+                    "id": "indication.initial_injection.conservative_therapy.herpes_zoster_failed",
+                    "type": "leaf",
+                    "description": "For herpes zoster pain: conservative measures failed and waiting period is inappropriate.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Herpes zoster associated pain which has failed conservative measures and a waiting period is not appropriate"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Condition", "MedicationStatement", "Observation"],
+                      "extraction_hints": "Applies only when the qualifying diagnosis is herpes zoster (B02.*). Look for antiviral therapy tried, narrative about pain failing to respond, and rationale that delay is clinically inappropriate.",
+                      "value_constraints": {},
+                      "evaluator_kind": "narrative_check"
+                    },
+                    "verdict_rubric": {
+                      "met": "Herpes zoster diagnosis confirmed AND conservative measures documented as failed AND rationale that waiting is inappropriate.",
+                      "not_met": "Herpes zoster diagnosis not present, OR criteria above not satisfied.",
+                      "unclear": "Herpes zoster diagnosis present but conservative-measure failure not fully documented.",
+                      "not_documented": "Herpes zoster not in case."
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+
+          {
+            "id": "indication.repeat_injection",
+            "type": "internal",
+            "operator": "ALL",
+            "description": "Repeat (therapeutic) injection criteria — patient must have documented meaningful response to prior injection.",
+            "policy_citation": {
+              "page": 2,
+              "section": "Coverage Policy",
+              "quote": "the diagnostic or last therapeutic injection for the current episode of pain must have provided significant functional pain relief of at least 50%"
+            },
+            "children": [
+              {
+                "id": "indication.repeat_injection.prior_response_50pct",
+                "type": "leaf",
+                "description": "Prior injection provided at least 50% pain relief.",
+                "policy_citation": {
+                  "page": 2,
+                  "section": "Coverage Policy",
+                  "quote": "significant functional pain relief of at least 50%"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Procedure", "Observation", "ClinicalImpression"],
+                  "extraction_hints": "Look for prior ESI Procedure resources (CPT 62320-62323, 64479-64484) with associated outcome Observations or progress notes describing percentage pain relief. Compare pre- and post-injection NRS scores if both are present (≥50% reduction = met).",
+                  "value_constraints": { "min_pain_relief_pct": 50 },
+                  "evaluator_kind": "numeric_threshold"
+                },
+                "verdict_rubric": {
+                  "met": "Documented ≥50% pain relief following the prior injection (either percentage stated or computable from pre/post NRS).",
+                  "not_met": "Prior injection documented with <50% relief, or stated as 'no improvement'.",
+                  "unclear": "Prior injection documented but outcome ambiguous ('some improvement', 'mild relief').",
+                  "not_documented": "No prior injection or no outcome documented."
+                }
+              },
+              {
+                "id": "indication.repeat_injection.prior_response_measure",
+                "type": "internal",
+                "operator": "ONE_OF",
+                "description": "Prior response measured by at least one of: pain-level decrease, pain-medication-usage decrease, OR physical-function increase.",
+                "policy_citation": {
+                  "page": 2,
+                  "section": "Coverage Policy",
+                  "quote": "decrease in pain level, decrease in pain medication usage"
+                },
+                "children": [
+                  {
+                    "id": "indication.repeat_injection.prior_response_measure.pain_level_decrease",
+                    "type": "leaf",
+                    "description": "Decrease in pain level (e.g., NRS pre vs post) documented after prior injection.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "decrease in pain level"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Observation"],
+                      "extraction_hints": "Compare pain-score Observations (LOINC 38208-5) before and after the prior injection date.",
+                      "value_constraints": {},
+                      "evaluator_kind": "numeric_threshold"
+                    },
+                    "verdict_rubric": {
+                      "met": "Quantified or qualified pain-level decrease post-injection vs pre-injection.",
+                      "not_met": "Pain level documented as same or worse post-injection.",
+                      "unclear": "Pain level measurement only on one side of the injection.",
+                      "not_documented": "No comparable pain scores."
+                    }
+                  },
+                  {
+                    "id": "indication.repeat_injection.prior_response_measure.medication_decrease",
+                    "type": "leaf",
+                    "description": "Decrease in pain medication usage documented after prior injection.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "decrease in pain medication usage"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["MedicationStatement", "MedicationRequest"],
+                      "extraction_hints": "Compare opioid/analgesic dose, frequency, or count of distinct medications before and after the prior injection. Look for tapering language or refill-frequency reduction.",
+                      "value_constraints": {},
+                      "evaluator_kind": "numeric_threshold"
+                    },
+                    "verdict_rubric": {
+                      "met": "Documented reduction in pain medication after prior injection.",
+                      "not_met": "Medication unchanged or increased.",
+                      "unclear": "Medication change mentioned but direction/magnitude unclear.",
+                      "not_documented": "No pre/post medication data."
+                    }
+                  },
+                  {
+                    "id": "indication.repeat_injection.prior_response_measure.functional_improvement",
+                    "type": "leaf",
+                    "description": "Increase in physical function documented after prior injection.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "an increase in physical function"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Observation", "Condition"],
+                      "extraction_hints": "Look for improvement in ADLs, return to work, increased walking tolerance, improved Oswestry Disability Index (ODI) or RMDQ scores.",
+                      "value_constraints": {},
+                      "evaluator_kind": "functional_impact"
+                    },
+                    "verdict_rubric": {
+                      "met": "Specific functional improvement documented after prior injection.",
+                      "not_met": "Function documented as unchanged or worsened.",
+                      "unclear": "Improvement mentioned but not specific or measurable.",
+                      "not_documented": "No pre/post functional data."
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "indication.repeat_injection.prior_response_maintained_6_weeks",
+                "type": "leaf",
+                "description": "The 50% relief was maintained for at least 6 weeks.",
+                "policy_citation": {
+                  "page": 2,
+                  "section": "Coverage Policy",
+                  "quote": "maintained for at least 6 weeks"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Procedure", "Observation"],
+                  "extraction_hints": "Compute time between the prior injection date and the date of follow-up note documenting sustained relief.",
+                  "value_constraints": { "min_duration_weeks": 6 },
+                  "evaluator_kind": "temporal_constraint"
+                },
+                "verdict_rubric": {
+                  "met": "Documented sustained ≥50% relief for ≥6 weeks post-injection.",
+                  "not_met": "Relief was documented as lasting <6 weeks.",
+                  "unclear": "Relief documented but duration ambiguous.",
+                  "not_documented": "No information on duration of relief."
+                }
+              }
+            ]
+          }
+        ]
+      },
+
+      {
+        "id": "frequency_and_location",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Frequency and location of injections are within policy limits.",
+        "policy_citation": {
+          "page": 2,
+          "section": "Coverage Policy",
+          "quote": "Frequency and location of injection(s) are appropriate, as indicated by ALL the following"
+        },
+        "children": [
+          {
+            "id": "frequency_and_location.frequency_within_limits",
+            "type": "internal",
+            "operator": "ONE_OF",
+            "description": "Frequency limit depends on branch (initial vs repeat).",
+            "children": [
+              {
+                "id": "frequency_and_location.frequency_within_limits.initial",
+                "type": "internal",
+                "operator": "ALL",
+                "description": "For initial (diagnostic) injection: max 2 per region AND injections ≥2 weeks apart.",
+                "policy_citation": {
+                  "page": 2,
+                  "section": "Coverage Policy",
+                  "quote": "Initial (Diagnostic) injection(s): Maximum of 2 injections per region with injections at least 2 weeks"
+                },
+                "children": [
+                  {
+                    "id": "frequency_and_location.frequency_within_limits.initial.max_2_per_region",
+                    "type": "leaf",
+                    "description": "No more than 2 diagnostic injections per region in the current episode.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "Maximum of 2 injections per region"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Procedure"],
+                      "extraction_hints": "Count prior ESI Procedure resources in the same region (cervical/thoracic combined; lumbar separate). The pending request counts as the next one.",
+                      "value_constraints": { "max_count_per_region": 2 },
+                      "evaluator_kind": "numeric_count"
+                    },
+                    "verdict_rubric": {
+                      "met": "Count of prior diagnostic injections in the relevant region is ≤1 (so the requested injection would be #2 or first).",
+                      "not_met": "Count of prior diagnostic injections in the relevant region is ≥2.",
+                      "unclear": "Prior injection count ambiguous due to incomplete history.",
+                      "not_documented": "No prior procedure history in the Bundle (assumed initial)."
+                    }
+                  },
+                  {
+                    "id": "frequency_and_location.frequency_within_limits.initial.two_week_gap",
+                    "type": "leaf",
+                    "description": "Injections in the same episode are spaced at least 2 weeks apart.",
+                    "policy_citation": {
+                      "page": 2,
+                      "section": "Coverage Policy",
+                      "quote": "injections at least 2 weeks"
+                    },
+                    "evaluation": {
+                      "fact_types_needed": ["Procedure"],
+                      "extraction_hints": "If a prior injection exists in the current episode, compute the date difference from the most recent prior injection to the requested service date.",
+                      "value_constraints": { "min_days_between": 14 },
+                      "evaluator_kind": "temporal_constraint"
+                    },
+                    "verdict_rubric": {
+                      "met": "≥14 days between most recent prior injection and the requested service date — OR — no prior injection (first in episode).",
+                      "not_met": "<14 days between most recent prior injection and the requested service date.",
+                      "unclear": "Prior injection date is ambiguous.",
+                      "not_documented": "No prior injection in the Bundle (treated as met for an initial first request)."
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "frequency_and_location.frequency_within_limits.repeat",
+                "type": "leaf",
+                "description": "For repeat (therapeutic) injection: no more than 4 injections total per region per rolling 12-month period.",
+                "policy_citation": {
+                  "page": 2,
+                  "section": "Coverage Policy",
+                  "quote": "Repeat injection(s): No more than 4 injections total per region"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Procedure"],
+                  "extraction_hints": "Count prior ESI Procedure resources in the same region (cervical/thoracic combined; lumbar separate) with dates within the trailing 12 months of the requested service date. Inclusive of any prior diagnostic injections.",
+                  "value_constraints": { "max_count_per_region_rolling_12mo": 4 },
+                  "evaluator_kind": "numeric_count"
+                },
+                "verdict_rubric": {
+                  "met": "Count of prior injections in the region within trailing 12 months is ≤3 (so the requested injection would be #4 or fewer).",
+                  "not_met": "Count of prior injections in the region within trailing 12 months is ≥4.",
+                  "unclear": "Prior injection count ambiguous or some dates missing.",
+                  "not_documented": "No prior procedure history in the Bundle (treat as met)."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+
+  "exclusions": [
+    {
+      "id": "X1",
+      "description": "Non-radicular back pain — ESIs are not indicated for axial low back pain without radicular features.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Limitations and Exclusions",
+        "quote": "For non-radicular back pain"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "Observation"],
+        "extraction_hints": "Look for ICD-10 codes M54.5 (low back pain), M54.50, M54.59 (non-radicular axial pain) as the primary diagnosis without accompanying radicular ICD-10 (M54.1x, M54.3x, M54.4x).",
+        "value_constraints": { "non_qualifying_primary_icd10": ["M54.5", "M54.50", "M54.59", "M54.9"] },
+        "evaluator_kind": "diagnosis_code"
+      },
+      "verdict_rubric": {
+        "met": "Primary diagnosis is axial / non-radicular back pain without radicular features documented.",
+        "not_met": "Diagnosis includes a radicular component (radiculopathy, sciatica, neurogenic claudication).",
+        "unclear": "Mixed diagnoses with both axial and radicular language; primary indication ambiguous.",
+        "not_documented": "Pain documented but radicular vs. non-radicular character is not addressed."
+      }
+    },
+    {
+      "id": "X2",
+      "description": "Myofascial pain syndrome — ESIs are not indicated for myofascial pain.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Limitations and Exclusions",
+        "quote": "ESI used for treatment of non-radicular spinal pain or myofascial pain syndrome"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition"],
+        "extraction_hints": "Look for ICD-10 M79.1* (myalgia), M79.18 (other myalgia), or narrative referencing myofascial pain, trigger points, fibromyalgia as the primary indication.",
+        "value_constraints": { "non_qualifying_icd10_patterns": ["M79.1*"] },
+        "evaluator_kind": "diagnosis_code"
+      },
+      "verdict_rubric": {
+        "met": "Primary indication is myofascial pain (e.g., M79.18 as primary).",
+        "not_met": "Myofascial pain not listed, or listed only as secondary to a qualifying radicular indication.",
+        "unclear": "Myofascial pain listed among multiple diagnoses; primary indication unclear.",
+        "not_documented": "Myofascial pain not mentioned in case."
+      }
+    },
+    {
+      "id": "X3",
+      "description": "Repeat ESI more frequently than once every 2–3 months.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Limitations and Exclusions",
+        "quote": "Repeat ESI (after the initial one or two diagnostic ESIs) performed more frequently than once every two to three months"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Procedure"],
+        "extraction_hints": "If branch=repeat, compute the gap from the most recent prior ESI to the requested service date. If gap < 60 days (2 months), exclusion is met (deny).",
+        "value_constraints": { "min_days_between_repeats": 60 },
+        "evaluator_kind": "temporal_constraint"
+      },
+      "verdict_rubric": {
+        "met": "Most recent prior ESI is <60 days before requested service date.",
+        "not_met": "Gap is ≥60 days, OR no prior ESI (initial branch).",
+        "unclear": "Prior ESI date ambiguous.",
+        "not_documented": "No prior ESI in Bundle (treat as not_met for repeat-too-frequent)."
+      }
+    },
+    {
+      "id": "X4",
+      "description": "Planned series of ESI without evaluation of response to each injection.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Limitations and Exclusions",
+        "quote": "A planned series of ESI without evaluation of response to each injection (example, series of three injections)"
+      },
+      "evaluation": {
+        "fact_types_needed": ["ServiceRequest", "DocumentReference"],
+        "extraction_hints": "Look for narrative explicitly proposing 'a series of 3 injections', 'planned three injections', without language about evaluating response after each one.",
+        "value_constraints": {},
+        "evaluator_kind": "narrative_check"
+      },
+      "verdict_rubric": {
+        "met": "Documentation explicitly proposes a fixed series without per-injection response evaluation.",
+        "not_met": "No such language, OR plan explicitly includes response evaluation between injections.",
+        "unclear": "Series language ambiguous.",
+        "not_documented": "Not addressed."
+      }
+    },
+    {
+      "id": "X5",
+      "description": "Known allergy to contrast, local anesthetic, or corticosteroid.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Contraindications",
+        "quote": "Known allergies to contrast agents, local anesthetics, or corticosteroids"
+      },
+      "evaluation": {
+        "fact_types_needed": ["AllergyIntolerance", "Condition"],
+        "extraction_hints": "Look for AllergyIntolerance resources or narrative referencing allergy/anaphylaxis to iodinated contrast, lidocaine, bupivacaine, methylprednisolone, triamcinolone, dexamethasone.",
+        "value_constraints": {},
+        "evaluator_kind": "diagnosis_code"
+      },
+      "verdict_rubric": {
+        "met": "Documented allergy to any agent in the listed classes.",
+        "not_met": "No relevant allergy documented.",
+        "unclear": "Generic 'NKDA' but specific class allergy not addressed.",
+        "not_documented": "No allergy history available."
+      }
+    },
+    {
+      "id": "X6",
+      "description": "Bleeding disorder or current anticoagulation therapy that increases bleeding risk.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Contraindications",
+        "quote": "History of bleeding disorders or current use of medications that may increase the risk of bleeding"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "MedicationStatement", "MedicationRequest"],
+        "extraction_hints": "Look for bleeding-disorder Conditions (hemophilia, von Willebrand, thrombocytopenia) OR active anticoagulation medications (warfarin, apixaban, rivaroxaban, dabigatran, edoxaban, heparin, enoxaparin, clopidogrel, ticagrelor, prasugrel).",
+        "value_constraints": {},
+        "evaluator_kind": "class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Active anticoagulant medication OR documented bleeding disorder.",
+        "not_met": "No such condition or medication in record.",
+        "unclear": "Medication name ambiguous (e.g., 'blood thinner' without specifics).",
+        "not_documented": "No medication or bleeding history available."
+      }
+    },
+    {
+      "id": "X7",
+      "description": "Active infection locally or systemically; spinal stenosis with intraspinal obstruction; or previous fusion at the indicated spinal level.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Contraindications",
+        "quote": "Active infection locally or systemically, spinal stenosis resulting in intraspinal obstruction, or previous fusion at the indicated spinal level"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "Procedure", "Observation"],
+        "extraction_hints": "Look for active infection (fever, elevated WBC, ICD-10 A40-A41 sepsis, L02 abscess), or imaging showing intraspinal obstruction, or prior fusion Procedure (CPT 22612, 22630, 22633) at the same level as the requested injection.",
+        "value_constraints": {},
+        "evaluator_kind": "narrative_check"
+      },
+      "verdict_rubric": {
+        "met": "Any of: active infection documented; intraspinal obstruction; prior fusion at the requested level.",
+        "not_met": "None of the above present.",
+        "unclear": "One of the above mentioned but extent unclear.",
+        "not_documented": "Not addressed."
+      }
+    },
+    {
+      "id": "X8",
+      "description": "Severe spinal pathology — tumors, cauda equina syndrome, or spinal cord compression.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Contraindications",
+        "quote": "Other spinal pathology such as spinal tumors, cauda equina syndrome, spinal cord compression"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "DiagnosticReport"],
+        "extraction_hints": "Look for ICD-10 C41.* (malignant neoplasm of spine), D32.* (benign neoplasm of meninges/spinal), G83.4 (cauda equina syndrome), G95.2* (cord compression).",
+        "value_constraints": { "non_qualifying_icd10_patterns": ["C41.*", "D32.*", "G83.4", "G95.2*"] },
+        "evaluator_kind": "diagnosis_code"
+      },
+      "verdict_rubric": {
+        "met": "Any of: spinal tumor, cauda equina, spinal cord compression documented.",
+        "not_met": "None present.",
+        "unclear": "Findings suggestive but not confirmed.",
+        "not_documented": "Not addressed."
+      }
+    },
+    {
+      "id": "X9",
+      "description": "Uncontrolled comorbidities exacerbated by steroid use (severe CHF, uncontrolled diabetes, poorly controlled hypertension).",
+      "policy_citation": {
+        "page": 3,
+        "section": "Contraindications",
+        "quote": "Co-morbidities that can be exacerbated by steroid use such as severe congestive heart failure, uncontrolled diabetes, and poorly controlled hypertension and other unstable medical conditions"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "Observation"],
+        "extraction_hints": "Look for severe CHF (NYHA III-IV, recent decompensation), uncontrolled diabetes (HbA1c >9% or recurrent DKA), uncontrolled hypertension (sustained BP >160/100), or other unstable medical conditions.",
+        "value_constraints": {},
+        "evaluator_kind": "narrative_check"
+      },
+      "verdict_rubric": {
+        "met": "Any uncontrolled comorbidity meeting the descriptions above documented.",
+        "not_met": "Comorbidities documented but well-controlled.",
+        "unclear": "Comorbidity present but control status ambiguous.",
+        "not_documented": "Not addressed."
+      }
+    },
+    {
+      "id": "X10",
+      "description": "Use of fluoroscopy in pregnant women.",
+      "policy_citation": {
+        "page": 3,
+        "section": "Contraindications",
+        "quote": "Use of fluoroscopy in pregnant women"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "Observation", "Patient"],
+        "extraction_hints": "If Patient.gender == female and reproductive age, check for pregnancy diagnoses (ICD-10 Z34, Z33, O09) or positive hCG observations. CPT 62321 and 62323 use fluoroscopy.",
+        "value_constraints": {},
+        "evaluator_kind": "diagnosis_code"
+      },
+      "verdict_rubric": {
+        "met": "Pregnancy documented at time of requested service.",
+        "not_met": "Patient is male, or not pregnant.",
+        "unclear": "Female of reproductive age, pregnancy status not addressed.",
+        "not_documented": "Not addressed and not flagged for additional screening."
+      }
+    }
+  ],
+
+  "metadata": {
+    "authored_by": "system",
+    "authored_at": "2026-05-22",
+    "review_status": "draft-day2-complete",
+    "test_cases": ["case_smith_001"],
+    "operator_coverage": {
+      "ALL": "root, eligibility, initial_injection, severity, conservative_therapy.failure, conservative_therapy.failure.pt, conservative_therapy.contraindicated, repeat_injection, frequency_and_location, frequency_within_limits.initial",
+      "ONE_OF": "indication, diagnosis_supported, conservative_therapy, repeat_injection.prior_response_measure, frequency_within_limits",
+      "NOT": "exclusions list (each evaluated independently; any met → deny short-circuit by Decider)",
+      "AT_LEAST_K": "supported by tree.py but not exercised by this policy; reserved for future policies (e.g., \"at least 2 of 3 objective evidence types\")"
+    },
+    "notes": "Per-session count limits (transforaminal ≤2, caudal/interlaminar ≤1) are out of prototype scope (single-request evaluation). SNRB-specific exclusions (items 5-8 in Limitations) apply to CPT 64479-class transforaminal SNRBs and are not modeled separately in this prototype."
+  }
+}
