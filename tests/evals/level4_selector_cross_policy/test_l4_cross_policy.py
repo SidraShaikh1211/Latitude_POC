@@ -36,6 +36,7 @@ def _ctx(
     service_date: str = "2026-04-08",
     setting: str = "outpatient",
     category: str = "procedural",
+    requested_icd10: list[str] | None = None,
 ) -> CaseContext:
     return CaseContext(
         cpt_code=cpt,
@@ -47,6 +48,9 @@ def _ctx(
         service_date=date.fromisoformat(service_date),
         care_setting=setting,
         request_category=category,
+        requested_indication_icd10_codes=(
+            requested_icd10 if requested_icd10 is not None else list(icd10)
+        ),
     )
 
 
@@ -133,16 +137,108 @@ def test_L4_SEL_07_zepbound_for_minor(reg):
     assert any("age" in r.lower() for _, r in res.eliminated)
 
 
-def test_L4_SEL_08_endometriosis_to_oregon_adenomyosis_policy(reg):
-    """Endometriosis-only (no adenomyosis) routed to the oregon-hcr-39 policy.
-    The policy's applies_to.icd10 includes N80.* (which matches N80.03 adenomyosis
-    AND N80.1 endometriosis), so the SELECTOR matches — but Section A criteria
-    apply, not B. Selector returns ok; downstream X1 exclusion should fire."""
+def test_L4_SEL_08_endometriosis_goes_to_endometriosis_policy(reg):
+    """Endometriosis-only (no adenomyosis) routes to oregon-hcr-39-endometriosis.
+
+    Both Oregon hysterectomy policies pass Tier 1 because the adenomyosis
+    policy uses a broad N80.* glob that matches N80.1. They tie on Tier 2
+    static specificity (same CPT count, same state, same LOB, but different
+    ICD-pattern counts may already differentiate). Tier 3 — case-aware ICD-10
+    match quality — must pick the endometriosis policy because it lists
+    N80.1 as a literal subcode while the adenomyosis policy only matches
+    via the broad glob."""
     res = select_policy(
         _ctx(cpt="58570", icd10=["N80.1"], payer="oregon-hca", state="OR", age=42, category="surgical"),
         registry=reg,
     )
-    # Selector matches (the policy's icd10 pattern N80.* is broad)
+    assert res.status == "ok"
+    assert res.selected_policy_id == "oregon-hcr-39-endometriosis"
+    assert res.tiebreaker_used == "icd10_match_quality"
+
+
+def test_L4_SEL_09_adenomyosis_still_goes_to_adenomyosis_policy(reg):
+    """Regression guard: N80.03 (adenomyosis) routes to oregon-hcr-39.
+
+    The endometriosis policy's icd10_patterns intentionally enumerate
+    N80.0/N80.1/.../N80.9 (omitting N80.03), so the filter eliminates it
+    before any tier-based ranking. Only oregon-hcr-39 (broad N80.*) survives
+    Tier 1, and is picked unambiguously."""
+    res = select_policy(
+        _ctx(cpt="58570", icd10=["N80.03"], payer="oregon-hca", state="OR", age=46, category="surgical"),
+        registry=reg,
+    )
     assert res.status == "ok"
     assert res.selected_policy_id == "oregon-hcr-39"
-    # The downstream adjudicator will fire X1 exclusion — that's tested at L3.
+
+
+def test_L4_SEL_10_diabetes_med_with_obesity_comorbidity(reg):
+    """Patient has both diabetes (E11.9) and obesity (E66.01); the bundle
+    declares the requested line item is *for* diabetes only. Two synthetic
+    policies cover the same drug — one diabetes-specific, one that covers
+    both indications. The diabetes-specific policy must win.
+
+    Demonstrates the design generalizes beyond the Oregon hysterectomy case:
+    Tier 1 uses requested_indication_icd10_codes to filter obesity-only
+    policies out; Tier 2 pattern-narrowness picks the diabetes-specific
+    policy over the broader one if both pass."""
+    from app.policy.registry import (
+        AppliesTo,
+        CriterionLeaf,
+        CriterionNode,
+        Policy,
+        PolicyCitation,
+    )
+
+    def _synth(*, policy_id: str, icd10: list[str]) -> Policy:
+        cit = PolicyCitation(page=1, section=None, quote="stub")
+        leaf = CriterionLeaf(
+            id=f"{policy_id}.leaf", type="leaf", description="",
+            policy_citation=cit, evaluation={}, verdict_rubric={},
+        )
+        return Policy(
+            policy_id=policy_id, name=policy_id, payer_id="acme",
+            version="2026-01-01", effective_from="2026-01-01", effective_until=None,
+            source_pdf_path=None, source_total_pages=0,  # type: ignore[arg-type]
+            applies_to=AppliesTo(
+                cpt_codes=["jardiance-empagliflozin"], hcpcs_codes=[],
+                icd10_patterns=icd10,
+                lines_of_business=["commercial"], states=["MA"],
+                age_min=18, age_max=None,
+                settings_of_care=["outpatient"], request_categories=["pharmacy"],
+                branches={}, payer_id="acme",
+            ),
+            criteria=CriterionNode(
+                id="root", type="internal", operator="ALL",
+                description="", children=[leaf],
+            ),
+            exclusions=[],
+        )
+
+    # Build an isolated registry with just our two synthetic policies so the
+    # five-real-policy registry isn't polluted.
+    from app.policy.registry import PolicyRegistry
+    iso = PolicyRegistry()
+    diabetes_only = _synth(policy_id="acme-jardiance-diabetes", icd10=["E11.*"])
+    covers_both = _synth(
+        policy_id="acme-jardiance-broad",
+        icd10=["E11.*", "E66.*"],
+    )
+    iso._by_id[diabetes_only.policy_id] = diabetes_only
+    iso._by_id[covers_both.policy_id] = covers_both
+    for p in (diabetes_only, covers_both):
+        for c in p.applies_to.cpt_codes:
+            iso._by_cpt[c].append(p)
+        iso._by_payer[p.payer_id].append(p)
+
+    res = select_policy(
+        _ctx(
+            cpt="jardiance-empagliflozin",
+            icd10=["E11.9", "E66.01"],   # full patient diagnosis list
+            requested_icd10=["E11.9"],   # claim.item.diagnosisSequence → diabetes
+            payer="acme", lob="commercial", state="MA", age=58, category="pharmacy",
+        ),
+        registry=iso,
+    )
+    assert res.status == "ok"
+    assert res.selected_policy_id == "acme-jardiance-diabetes"
+    assert res.tiebreaker_used == "icd10_pattern_narrowness"

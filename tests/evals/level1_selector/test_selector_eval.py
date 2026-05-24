@@ -108,6 +108,7 @@ def _ctx(
     *,
     cpt: str = "62323",
     icd10: list[str] | None = None,
+    requested_icd10: list[str] | None = None,
     payer: str = "molina",
     lob: str = "medicaid",
     state: str = "NY",
@@ -116,9 +117,10 @@ def _ctx(
     setting: str = "outpatient",
     category: str = "procedural",
 ) -> CaseContext:
+    full = icd10 if icd10 is not None else ["M54.16"]
     return CaseContext(
         cpt_code=cpt,
-        icd10_codes=icd10 if icd10 is not None else ["M54.16"],
+        icd10_codes=full,
         payer_id=payer,
         line_of_business=lob,
         state=state,
@@ -126,6 +128,9 @@ def _ctx(
         service_date=date.fromisoformat(service_date),
         care_setting=setting,
         request_category=category,
+        requested_indication_icd10_codes=(
+            requested_icd10 if requested_icd10 is not None else list(full)
+        ),
     )
 
 
@@ -234,13 +239,137 @@ def test_S11_specificity_disambiguation():
 
 
 def test_S12_genuine_ambiguity():
-    """S12: two policies with identical applies_to footprint → needs_disambiguation"""
+    """S12: two policies with identical applies_to footprint → needs_disambiguation.
+    No case_facts provided, so Tier 4 is skipped and the tie persists."""
     reg = PolicyRegistry()
     _register(reg, _synthetic_policy(policy_id="synth-a", cpts=["62321", "62322", "62323"]))
     _register(reg, _synthetic_policy(policy_id="synth-b", cpts=["62321", "62322", "62323"]))
     res = select_policy(_ctx(), registry=reg)
     assert res.status == "needs_disambiguation"
     assert res.selected_policy_id is None
+    assert set(res.tie_set) == {"synth-a", "synth-b"}
+    assert res.tiebreaker_used is None
+
+
+def test_S15_icd10_match_quality_breaks_tie():
+    """S15: two policies cover the same CPTs but one uses a literal ICD-10
+    code while the other uses a broad glob. The literal-match policy must
+    win at Tier 3 (case-aware ICD-10 match quality)."""
+    reg = PolicyRegistry()
+    _register(reg, _synthetic_policy(
+        policy_id="synth-literal",
+        cpts=["62321", "62322", "62323"],
+        icd10=["M54.16"],
+    ))
+    _register(reg, _synthetic_policy(
+        policy_id="synth-glob",
+        cpts=["62321", "62322", "62323"],
+        icd10=["M54.*"],
+    ))
+    # With ICD list lengths different (1 vs 1), static specificity ties.
+    # Tier 3 should resolve via literal vs glob.
+    res = select_policy(_ctx(icd10=["M54.16"]), registry=reg)
+    assert res.status == "ok"
+    assert res.selected_policy_id == "synth-literal"
+    assert res.tiebreaker_used == "icd10_match_quality"
+
+
+def test_S16_icd_pattern_narrowness_breaks_tie():
+    """S16: two policies cover the same CPTs; one covers ONE indication
+    (1 ICD pattern), the other covers TWO (2 patterns). Both match the
+    requested ICD via the same glob, so Tier 3 alone would tie — Tier 4
+    ICD-pattern-narrowness must resolve it."""
+    reg = PolicyRegistry()
+    _register(reg, _synthetic_policy(
+        policy_id="synth-single-indication",
+        cpts=["62321", "62322", "62323"],
+        icd10=["M54.*"],
+    ))
+    _register(reg, _synthetic_policy(
+        policy_id="synth-multi-indication",
+        cpts=["62321", "62322", "62323"],
+        icd10=["M54.*", "M79.*"],
+    ))
+    res = select_policy(_ctx(icd10=["M54.16"]), registry=reg)
+    assert res.status == "ok"
+    assert res.selected_policy_id == "synth-single-indication"
+    assert res.tiebreaker_used == "icd10_pattern_narrowness"
+
+
+def test_S17_fact_coverage_breaks_tie():
+    """S17: two policies tied through Tier 3 (same CPTs, same ICDs). Tier 4
+    fact-coverage should pick the one whose criteria-tree needs facts the
+    case actually has evidence for."""
+    from app.extraction.intake import (
+        Citation,
+        ExtractedDiagnosticReport,
+        ExtractedFacts,
+        ExtractedObservation,
+    )
+    from app.pas.bundle_parser import FactCollection
+    from app.policy.registry import CriterionLeaf, CriterionNode, PolicyCitation
+    from app.policy.tools import CaseFacts
+
+    cit = PolicyCitation(page=1, section=None, quote="stub")
+
+    # Policy A — leaves require DiagnosticReport (imaging-heavy)
+    a_leaf = CriterionLeaf(
+        id="a.leaf", type="leaf", description="needs imaging",
+        policy_citation=cit,
+        evaluation={"fact_types_needed": ["DiagnosticReport"]},
+        verdict_rubric={},
+    )
+    # Policy B — leaves require AllergyIntolerance (allergy-driven)
+    b_leaf = CriterionLeaf(
+        id="b.leaf", type="leaf", description="needs allergy hx",
+        policy_citation=cit,
+        evaluation={"fact_types_needed": ["AllergyIntolerance"]},
+        verdict_rubric={},
+    )
+    reg = PolicyRegistry()
+    a = _synthetic_policy(policy_id="synth-imaging", cpts=["62321", "62322", "62323"])
+    a.criteria = CriterionNode(
+        id="root", type="internal", operator="ALL", description="", children=[a_leaf],
+    )
+    b = _synthetic_policy(policy_id="synth-allergy", cpts=["62321", "62322", "62323"])
+    b.criteria = CriterionNode(
+        id="root", type="internal", operator="ALL", description="", children=[b_leaf],
+    )
+    _register(reg, a)
+    _register(reg, b)
+
+    # Case has a DiagnosticReport but no allergy — favors synth-imaging.
+    cite = Citation(document_id="doc-1", page=1, quote="MRI lumbar")
+    extracted = ExtractedFacts(
+        diagnostic_reports=[ExtractedDiagnosticReport(
+            modality="MRI", body_site="lumbar", findings="L4-L5 disc bulge",
+            citations=[cite],
+        )],
+        observations=[ExtractedObservation(
+            code_display="Pain score", value_string="7/10",
+            citations=[cite],
+        )],
+    )
+    case_facts = CaseFacts(
+        bundle_facts=FactCollection(),
+        extracted=extracted,
+    )
+    res = select_policy(_ctx(), registry=reg, case_facts=case_facts)
+    assert res.status == "ok"
+    assert res.selected_policy_id == "synth-imaging"
+    assert res.tiebreaker_used == "fact_coverage"
+
+
+def test_S18_no_facts_falls_to_ambiguity():
+    """S18: two policies tied through Tier 3 AND no case_facts provided →
+    Tier 4 must NOT silently pick. The tie should fall through to
+    needs_disambiguation, preserving the no-auto-pick guarantee."""
+    reg = PolicyRegistry()
+    _register(reg, _synthetic_policy(policy_id="synth-a", cpts=["62321", "62322", "62323"]))
+    _register(reg, _synthetic_policy(policy_id="synth-b", cpts=["62321", "62322", "62323"]))
+    res = select_policy(_ctx(), registry=reg, case_facts=None)
+    assert res.status == "needs_disambiguation"
+    assert res.tiebreaker_used is None
     assert set(res.tie_set) == {"synth-a", "synth-b"}
 
 

@@ -128,7 +128,23 @@ These exercise the policy selector's filter chain. No LLM cost.
 | L4-SEL-05 | CPT 62323, M54.16, Molina Medicaid NY, 16yo | eliminated (age_min=18) |
 | L4-SEL-06 | CPT 62323, M54.16, Molina Medicaid TX, 50yo, 2023-06-01 | eliminated (service date before effective_from=2024-08-14) |
 | L4-SEL-07 | Tirzepatide, MassHealth, 14yo | ok → masshealth-anti-obesity but Zepbound branch eliminated (age); Wegovy pediatric branch matches |
-| L4-SEL-08 | CPT 62323, M54.16, Molina, 50yo + prior ESI 60 days ago in claims | ok → molina-mcp-032, branch=repeat |
+| L4-SEL-08 | CPT 58570, **N80.1** (endometriosis only), Oregon Medicaid, 42yo | ok → **oregon-hcr-39-endometriosis** (Tier 2/3 disambiguation: endometriosis policy's literal `N80.1` beats adenomyosis policy's broad `N80.*` glob) |
+| L4-SEL-09 | CPT 58570, N80.03 (adenomyosis), Oregon Medicaid, 46yo | ok → oregon-hcr-39 (endometriosis policy is filter-eliminated — N80.03 is intentionally omitted from its literal subcode list) |
+| L4-SEL-10 | Drug=jardiance, patient has **E11.9 + E66.01**, `Claim.item.diagnosisSequence` → diabetes only | ok → diabetes-specific synthetic policy (Tier 2 narrowness beats the "covers both" broader policy) |
+
+### Selector disambiguation ladder (introduced 2026-05-25)
+
+The selector runs a 4-tier deterministic ladder when ≥2 policies pass the
+Tier-1 filter. Tier 2 is static specificity (narrower CPT / ICD / state /
+LOB lists win). Tier 3 is **case-aware ICD-10 match quality** — literal
+codes beat wildcard globs against the case's actual ICDs. Tier 4 is a
+**fact-coverage peek** over the intake-extracted facts (skipped when no
+intake ran). If all four tiers leave ≥2 tied, `needs_disambiguation`
+fires and human review is required. `SelectionResult.tiebreaker_used`
+records which tier resolved the pick. The selector now reads the
+requested-indication ICDs from `Claim.item.diagnosisSequence` rather than
+the patient's full diagnosis list, so a single-indication request on a
+multi-diagnosis patient routes correctly.
 
 ---
 

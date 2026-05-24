@@ -41,6 +41,10 @@ class CaseContext:
     urgency: str = "standard"
     care_setting: str = "outpatient"
     request_category: str = "procedural"
+    # ICD-10s the requested line item is *for* (Claim.item.diagnosisSequence
+    # resolved against Claim.diagnosis). Falls back to `icd10_codes` when the
+    # bundle does not link an item to specific diagnoses.
+    requested_indication_icd10_codes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -107,7 +111,9 @@ def parse_pas_bundle(bundle_data: dict) -> ParsedBundle:
 
     service_date = _parse_service_date(claim)
     cpt_code = _extract_primary_cpt(claim)
-    icd10_codes = _extract_icd10_codes(claim)
+    dx_index = _build_diagnosis_index(claim)
+    icd10_codes = list(dx_index.values())
+    requested_indication_icd10_codes = _extract_requested_indication_codes(claim, dx_index)
     payer_id = _extract_payer_id(coverage)
     line_of_business = _extract_lob(coverage)
     state = _extract_state(coverage, patient)
@@ -128,6 +134,7 @@ def parse_pas_bundle(bundle_data: dict) -> ParsedBundle:
         urgency=urgency,
         care_setting=care_setting,
         request_category=request_category,
+        requested_indication_icd10_codes=requested_indication_icd10_codes,
     )
 
     sr_list = by_type.get("ServiceRequest", [])
@@ -196,16 +203,44 @@ def _extract_primary_cpt(claim: dict) -> str:
     raise BundleParseError("Claim.item[0].productOrService has no coding")
 
 
-def _extract_icd10_codes(claim: dict) -> list[str]:
-    codes: list[str] = []
-    for dx in claim.get("diagnosis") or []:
+def _build_diagnosis_index(claim: dict) -> dict[int, str]:
+    """Map Claim.diagnosis[].sequence → ICD-10 code.
+
+    When `sequence` is missing on an entry we synthesize a 1-based index in
+    document order, matching FHIR's implicit sequence rule.
+    """
+    index: dict[int, str] = {}
+    for i, dx in enumerate(claim.get("diagnosis") or [], start=1):
+        seq = dx.get("sequence") or i
         coding = (dx.get("diagnosisCodeableConcept") or {}).get("coding") or []
         for c in coding:
-            if "icd-10" in (c.get("system", "").lower()) or "icd10" in (c.get("system", "").lower()):
+            system = (c.get("system") or "").lower()
+            if "icd-10" in system or "icd10" in system:
                 code = c.get("code")
                 if code:
-                    codes.append(code)
-    return codes
+                    index[int(seq)] = code
+                    break
+    return index
+
+
+def _extract_requested_indication_codes(
+    claim: dict, dx_index: dict[int, str]
+) -> list[str]:
+    """Resolve `Claim.item[0].diagnosisSequence` against the diagnosis index.
+
+    The diagnosis-sequence link is the FHIR way to say "this line item is
+    requested *for* these specific diagnoses, not the patient's full problem
+    list." When the link is absent (legacy bundles or single-indication
+    cases) we fall back to every ICD-10 the claim carries.
+    """
+    items = claim.get("item") or []
+    if not items:
+        return list(dx_index.values())
+    seqs = items[0].get("diagnosisSequence") or []
+    linked = [dx_index[int(s)] for s in seqs if int(s) in dx_index]
+    if linked:
+        return linked
+    return list(dx_index.values())
 
 
 def _extract_payer_id(coverage: dict) -> str:

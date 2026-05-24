@@ -237,7 +237,10 @@ async def evaluate_pa_case(
     await _step("selecting")
     reg = registry or get_registry()
     selection = select_policy(
-        parsed.context, registry=reg, prior_procedures=parsed.facts.procedures_prior
+        parsed.context,
+        registry=reg,
+        prior_procedures=parsed.facts.procedures_prior,
+        case_facts=case_facts,
     )
     log.info("orchestrator.selection", status=selection.status,
              selected=selection.selected_policy_id, branch=selection.branch)
