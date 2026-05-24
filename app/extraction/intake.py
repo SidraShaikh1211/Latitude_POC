@@ -212,11 +212,16 @@ async def run_intake(
     user = "\n\n".join(user_parts)
 
     client = get_client()
+    # Intake regularly emits 4-8K of structured FHIR for a multi-page PDF, which
+    # easily blows past the client-default 60s per-request timeout and aborts
+    # silently. Give it 5 minutes of headroom — well inside the orchestrator's
+    # 600s pipeline deadline but enough that real PDFs finish.
     result: StructuredResult = await client.structured_output(
         system=system,
         user=user,
         schema=ExtractedFacts,
         max_tokens=8000,
+        timeout=300.0,
     )
     facts: ExtractedFacts = result.parsed  # type: ignore[assignment]
 
@@ -246,20 +251,32 @@ async def run_intake(
 def _verify_and_drop(
     facts: ExtractedFacts, document: ExtractedDocument
 ) -> tuple[int, int, list[str]]:
-    """Verify every citation. Drop any resource where ANY citation fails (the
-    fact's evidence is suspect). Return (passed, failed, dropped_ids)."""
+    """Verify every citation. Keep the resource if at least one citation
+    survives; drop only the failed citations. A resource with NO verifiable
+    citations is dropped entirely (we won't ground the adjudicator on
+    un-sourced facts). Returns (passed, failed, dropped_resource_labels).
+
+    Previously this dropped the *entire resource* on any failed citation,
+    which lost verified facts whenever a single quote had a PDF whitespace
+    glitch. Per-citation drop preserves the structured fact for downstream
+    reasoning while still refusing to expose an unverifiable quote."""
     passed = 0
     failed = 0
     dropped: list[str] = []
 
     for resource in list(_all_resources(facts)):
-        any_failed = False
         verified_citations: list[Citation] = []
         for cit in resource.citations:
             pt = document.page(cit.page)
             if pt is None:
                 failed += 1
-                any_failed = True
+                log.warning(
+                    "citation_failed",
+                    resource_type=resource.resource_type,
+                    page=cit.page,
+                    quote=cit.quote[:80],
+                    diagnostic=f"page {cit.page} out of range (1..{document.page_count})",
+                )
                 continue
             check = verify_substring(cit.quote, pt.normalized)
             if check.found:
@@ -267,7 +284,6 @@ def _verify_and_drop(
                 verified_citations.append(cit)
             else:
                 failed += 1
-                any_failed = True
                 log.warning(
                     "citation_failed",
                     resource_type=resource.resource_type,
@@ -276,13 +292,13 @@ def _verify_and_drop(
                     diagnostic=check.diagnostic,
                 )
 
-        if not verified_citations or any_failed:
+        if verified_citations:
+            resource.citations = verified_citations
+        else:
             dropped.append(
                 f"{resource.resource_type}:{getattr(resource, 'display', '') or getattr(resource, 'medication_name', '') or resource.id or '?'}"
             )
             _drop_resource(facts, resource)
-        else:
-            resource.citations = verified_citations
 
     return passed, failed, dropped
 

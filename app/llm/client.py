@@ -50,6 +50,29 @@ class Usage:
         self.cache_creation_tokens += other.cache_creation_tokens
         self.cost_usd += other.cost_usd
 
+    @property
+    def cacheable_input_tokens(self) -> int:
+        """Input tokens that went through the cache path (read + creation)."""
+        return self.cache_read_tokens + self.cache_creation_tokens
+
+    @property
+    def total_input_tokens(self) -> int:
+        """Every input token billed, including cache reads and creations."""
+        return self.input_tokens + self.cache_read_tokens + self.cache_creation_tokens
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Fraction of cacheable input that came from cache reads (vs. creations).
+
+        Useful as the canary for whether prompt-caching is paying off after a
+        new system / digest design lands. Returns 0.0 when no cacheable
+        traffic happened so it's safe to log unconditionally.
+        """
+        denom = self.cacheable_input_tokens
+        if denom == 0:
+            return 0.0
+        return self.cache_read_tokens / denom
+
 
 # Pricing for Claude Sonnet 4.5/4.6 as of late 2025 (USD per million tokens).
 # Cache reads are ~90% cheaper than fresh input; cache creation is ~25% more
@@ -110,16 +133,17 @@ class AnthropicClient:
         self,
         api_key: str | None = None,
         model: str | None = None,
-        max_retries: int = 3,
+        max_retries: int = 2,
         timeout: float = 60.0,
     ) -> None:
         self._api_key = api_key or settings.anthropic_api_key
         self._model = model or settings.anthropic_model
         # Explicit per-request timeout: without it, AsyncAnthropic defaults to
         # 600s, so a single hung HTTP call can hold an adjudicator iteration
-        # for 10 minutes. With max_retries=3 and an 8-iteration agent loop,
-        # that compounds into pipelines that never terminate from the caller's
-        # perspective. 60s is generous for one Claude turn.
+        # for 10 minutes. retries=2 + 60s timeout bounds one iteration at
+        # ~180s in the worst case; the per-leaf `asyncio.wait_for` budget in
+        # adjudicate_all (leaf_budget_seconds, default 120s) is the real
+        # outer guard that will tear down a stuck leaf well before that.
         self._client = AsyncAnthropic(
             api_key=self._api_key, max_retries=max_retries, timeout=timeout,
         )
@@ -157,9 +181,14 @@ class AnthropicClient:
         schema: type[T],
         max_tokens: int = 4096,
         cache_system: bool = True,
+        timeout: float | None = None,
     ) -> StructuredResult:
         """Ask Claude to return JSON matching `schema`. Uses tool-use under the
         hood to enforce JSON output (more reliable than free-form JSON requests).
+
+        `timeout` overrides the client-default per-request timeout (60s). Pass a
+        larger value for long-output calls like intake on multi-page PDFs,
+        where 60s reliably fires before structured JSON finishes generating.
         """
         tool_name = f"return_{schema.__name__.lower()}"
         json_schema = schema.model_json_schema()
@@ -172,7 +201,7 @@ class AnthropicClient:
 
         system_blocks = self._system_blocks(system, cache=cache_system)
 
-        resp = await self._client.messages.create(
+        create_kwargs: dict[str, Any] = dict(
             model=self._model,
             max_tokens=max_tokens,
             system=system_blocks,
@@ -180,6 +209,10 @@ class AnthropicClient:
             tool_choice={"type": "tool", "name": tool_name},
             messages=[{"role": "user", "content": user}],
         )
+        if timeout is not None:
+            create_kwargs["timeout"] = timeout
+
+        resp = await self._client.messages.create(**create_kwargs)
         usage = _usage_from_response(resp)
 
         tool_input: dict | None = None

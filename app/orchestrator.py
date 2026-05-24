@@ -129,7 +129,11 @@ async def evaluate_pa_case(
     log.info("orchestrator.documents", count=len(documents), ids=list(documents.keys()))
 
     # Build CaseFacts shell now; intake will fill `extracted`
-    case_facts = CaseFacts(bundle_facts=parsed.facts, documents=documents)
+    case_facts = CaseFacts(
+        bundle_facts=parsed.facts,
+        documents=documents,
+        service_date=parsed.context.service_date,
+    )
 
     # Optional: run intake on PDFs
     intake: IntakeResult | None = None
@@ -187,6 +191,7 @@ async def evaluate_pa_case(
         exclusions=policy.exclusions,
         case=case_facts,
         branch=selection.branch,
+        policy=policy,
     )
 
     await _emit({

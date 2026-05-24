@@ -249,12 +249,14 @@ async def case_events(case_id: str, request: Request) -> StreamingResponse:
                     # Keep-alive comment so proxies don't close the pipe
                     yield ": keepalive\n\n"
                     continue
-                # When a `partial` event lands, re-fetch the snapshot so the
-                # client always gets resolved data rather than just field names.
-                if ev.get("type") == "partial":
+                # Re-fetch the snapshot so every push carries the latest
+                # resolved case rather than just an event envelope. Without
+                # this, frontends that only know how to consume snapshots
+                # would miss stage transitions like intake→adjudicating.
+                if ev.get("type") in ("partial", "stage"):
                     fresh = await get_case(case_id)
-                    yield _sse_event("partial", {
-                        "fields": ev.get("fields", []),
+                    yield _sse_event(ev["type"], {
+                        **{k: v for k, v in ev.items() if k != "type"},
                         "snapshot": fresh,
                     })
                 else:

@@ -111,10 +111,11 @@ async def claim_submit(
 
 
 # Wall-clock ceiling on the payer-side pipeline. With per-request Anthropic
-# timeouts of 60s, max_retries=3, and an 8-iteration agent loop per leaf, the
-# real-world cost-tuned target is ~3-4 min. 10 min is the hard ceiling — a
-# pipeline taking longer is wedged and should fail loudly instead of holding
-# the row in `processing` until the next server restart.
+# timeouts of 60s, max_retries=2, and an 8-iteration agent loop per leaf
+# (each leaf wrapped in a 120s `asyncio.wait_for` budget in adjudicate_all),
+# the real-world cost-tuned target is ~3-4 min. 10 min is the hard ceiling
+# — a pipeline taking longer is wedged and should fail loudly instead of
+# holding the row in `processing` until the next server restart.
 PIPELINE_DEADLINE_SECONDS = 600.0
 
 

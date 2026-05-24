@@ -42,12 +42,15 @@ class CaseFacts:
     - `bundle_facts`: structured resources from the inbound Da Vinci PAS Bundle
     - `extracted`: FHIR-shaped resources from PDF intake (with citations)
     - `documents`: cached ExtractedDocument objects by document_id
+    - `service_date`: requested service date (from Claim.item[].serviced[x])
+      used by deterministic age checks and any temporal-window evaluators
     """
 
     bundle_facts: FactCollection
     extracted: ExtractedFacts | None = None
     documents: dict[str, ExtractedDocument] = field(default_factory=dict)
     escalations: list[str] = field(default_factory=list)
+    service_date: date | None = None
 
 
 # ---------------------------------------------------------------------------

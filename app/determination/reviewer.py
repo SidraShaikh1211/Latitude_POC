@@ -335,10 +335,11 @@ async def review_case(
     if captured["output"] is None:
         log.warning("reviewer.no_output", iterations=trace.iterations)
         output = ReviewerOutput(
-            narrative=(
-                f"Outcome: {determination.outcome}. {determination.rationale} "
-                "[Reviewer did not return a structured output within the iteration budget; "
-                "narrative auto-generated from determination state.]"
+            narrative=_fallback_narrative(
+                determination,
+                "Reviewer agent did not return a structured output within the "
+                "iteration budget; narrative was auto-generated from the "
+                "deterministic outcome and rationale.",
             ),
             missing_info=[],
             key_evidence_cited=[],
@@ -351,9 +352,11 @@ async def review_case(
         except Exception as e:
             log.error("reviewer.invalid_output", error=str(e))
             output = ReviewerOutput(
-                narrative=(
-                    f"Outcome: {determination.outcome}. {determination.rationale} "
-                    f"[Reviewer returned invalid output: {e}]"
+                narrative=_fallback_narrative(
+                    determination,
+                    f"Reviewer returned a structured output that failed schema "
+                    f"validation ({e}); this narrative was auto-generated as a "
+                    "safe substitute.",
                 ),
                 human_review_flag=True,
                 human_review_reason=f"Reviewer output failed validation: {e}",
@@ -383,6 +386,29 @@ async def review_case(
         usage=trace.usage,
         tool_calls=trace.tool_calls,
     )
+
+
+_NARRATIVE_MIN_LENGTH = (
+    ReviewerOutput.model_json_schema()["properties"]["narrative"]["minLength"]
+)
+
+
+def _fallback_narrative(determination: Determination, suffix: str) -> str:
+    """Build an auto-generated narrative that is guaranteed to satisfy
+    `ReviewerOutput.narrative` min_length. Composes the deterministic outcome,
+    its rationale, and an explanatory suffix; pads with a trailing notice if
+    the rationale is unusually terse so Pydantic validation cannot fail."""
+    body = (
+        f"Outcome: {determination.outcome}. {determination.rationale.strip()} "
+        f"{suffix.strip()}"
+    ).strip()
+    if len(body) >= _NARRATIVE_MIN_LENGTH:
+        return body
+    padding = (
+        " A medical reviewer should read the case and provide the final "
+        "clinician-facing narrative."
+    )
+    return (body + padding).strip()
 
 
 def _verify_reviewer_quotes(output: ReviewerOutput, case: CaseFacts) -> ReviewerOutput:

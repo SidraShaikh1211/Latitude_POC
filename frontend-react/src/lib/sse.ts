@@ -115,11 +115,13 @@ export function useCaseStream(caseId: string | null): CaseDetail | undefined {
     };
     es.addEventListener("snapshot", apply as EventListener);
     es.addEventListener("partial", apply as EventListener);
+    es.addEventListener("stage", apply as EventListener);
     es.addEventListener("complete", apply as EventListener);
 
     return () => {
       es.removeEventListener("snapshot", apply as EventListener);
       es.removeEventListener("partial", apply as EventListener);
+      es.removeEventListener("stage", apply as EventListener);
       es.removeEventListener("complete", apply as EventListener);
       es.close();
     };
