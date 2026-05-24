@@ -8,6 +8,7 @@ from app.api import a2a as a2a_router
 from app.api import cases as cases_router
 from app.api import doctor as doctor_router
 from app.api import fhir_pas as fhir_pas_router
+from app.api import metrics as metrics_router
 from app.api import policies as policies_router
 from app.db.engine import init_db
 from app.db.orphan_sweep import sweep_orphans
@@ -84,6 +85,7 @@ app.include_router(cases_router.router)
 app.include_router(policies_router.router)
 app.include_router(fhir_pas_router.router)
 app.include_router(doctor_router.router)
+app.include_router(metrics_router.router)
 app.include_router(a2a_router.router)
 
 

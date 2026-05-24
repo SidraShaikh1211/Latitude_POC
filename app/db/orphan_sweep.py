@@ -39,11 +39,16 @@ IN_FLIGHT_CASE_STAGES = (
     "building_response",
 )
 
-# Submission states that mean "the doctor-side background task should still be running."
+# Submission states that mean the round trip hasn't finished:
+#   - the three doctor-side stages, plus
+#   - awaiting_payer_response — the doctor has handed off and is now waiting
+#     for the payer's callback POST. If the payer-side process dies before
+#     the callback fires, this row is stuck without a sweep.
 IN_FLIGHT_SUBMISSION_STATES = (
     "extracting_metadata",
     "bundle_ready",
     "sending",
+    "awaiting_payer_response",
 )
 
 

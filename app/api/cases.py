@@ -139,6 +139,7 @@ async def _persist(run: CaseRun) -> None:
                 if run.determination else None
             ),
             pas_response_bundle=run.response.bundle if run.response else None,
+            metrics=run.metrics,
             processing_stage="complete",
         )
         # Upsert: if exists, replace fields
@@ -148,7 +149,8 @@ async def _persist(run: CaseRun) -> None:
                 "status", "patient_display", "cpt_code", "payer_id",
                 "selected_policy_id", "branch", "outcome", "inbound_bundle",
                 "extracted_facts", "policy_selection", "criteria_evaluation",
-                "determination", "pas_response_bundle", "processing_stage",
+                "determination", "pas_response_bundle", "metrics",
+                "processing_stage",
             ):
                 setattr(existing, col, getattr(case, col))
         else:
@@ -202,6 +204,7 @@ async def get_case(case_id: str) -> dict[str, Any]:
             "criteria_evaluation": case.criteria_evaluation,
             "determination": case.determination,
             "pas_response_bundle": case.pas_response_bundle,
+            "metrics": case.metrics,
             "created_at": case.created_at.isoformat() if case.created_at else None,
             "updated_at": case.updated_at.isoformat() if case.updated_at else None,
         }

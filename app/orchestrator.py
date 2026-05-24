@@ -11,6 +11,7 @@ reviewer narrative + outbound ClaimResponse Bundle). Shared by:
 from __future__ import annotations
 
 import base64
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from app.determination.reviewer import ReviewerOutput, ReviewResult, review_case
 from app.determination.rollup import NodeVerdict, rollup
 from app.extraction.intake import IntakeResult, run_intake
 from app.extraction.pdf import ExtractedDocument, extract_pdf
+from app.llm.client import Usage
 from app.pas.bundle_builder import BuiltResponse, build_pas_response_bundle
 from app.pas.bundle_parser import ParsedBundle, parse_pas_bundle
 from app.policy.adjudicator import (
@@ -45,6 +47,52 @@ from app.policy.tools import CaseFacts
 log = structlog.get_logger()
 
 
+def _stage_metrics(name: str, duration_s: float, usage: Usage, llm_calls: int) -> dict[str, Any]:
+    """Format a single pipeline-stage entry for the metrics blob."""
+    return {
+        "name": name,
+        "duration_seconds": round(duration_s, 3),
+        "tokens_in": usage.input_tokens,
+        "tokens_out": usage.output_tokens,
+        "cache_read": usage.cache_read_tokens,
+        "cache_creation": usage.cache_creation_tokens,
+        "cost_usd": round(usage.cost_usd, 6),
+        "llm_calls": llm_calls,
+    }
+
+
+def _build_metrics(
+    *,
+    started_at: float,
+    stages: list[dict[str, Any]],
+    adjudication_leaves: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Roll the per-stage entries up into a single metrics blob."""
+    totals_usage = Usage()
+    total_calls = 0
+    for s in stages:
+        totals_usage.input_tokens += s["tokens_in"]
+        totals_usage.output_tokens += s["tokens_out"]
+        totals_usage.cache_read_tokens += s["cache_read"]
+        totals_usage.cache_creation_tokens += s["cache_creation"]
+        totals_usage.cost_usd += s["cost_usd"]
+        total_calls += s["llm_calls"]
+    return {
+        "duration_seconds": round(time.perf_counter() - started_at, 3),
+        "stages": stages,
+        "adjudication_leaves": adjudication_leaves,
+        "totals": {
+            "tokens_in": totals_usage.input_tokens,
+            "tokens_out": totals_usage.output_tokens,
+            "cache_read": totals_usage.cache_read_tokens,
+            "cache_creation": totals_usage.cache_creation_tokens,
+            "cost_usd": round(totals_usage.cost_usd, 6),
+            "llm_calls": total_calls,
+            "cache_hit_rate": round(totals_usage.cache_hit_rate, 4),
+        },
+    }
+
+
 @dataclass
 class CaseRun:
     case_id: str
@@ -57,6 +105,10 @@ class CaseRun:
     reviewer: ReviewResult | None
     response: BuiltResponse | None
     error: str | None = None
+    # Per-stage performance metrics. Populated whether the caller wired
+    # on_partial (async path) or not (sync wait=true path); _persist reads
+    # this and writes Case.metrics.
+    metrics: dict[str, Any] | None = None
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -107,6 +159,13 @@ async def evaluate_pa_case(
     case_id = case_id or f"case-{uuid.uuid4().hex[:10]}"
     log.info("orchestrator.start", case_id=case_id)
 
+    # Per-run perf telemetry — appended-to as each stage finishes, then
+    # persisted onto Case.metrics via on_partial. Surfaced by the
+    # Performance page (one row per run, expand for per-stage breakdown).
+    run_started = time.perf_counter()
+    stages: list[dict[str, Any]] = []
+    adjudication_leaves: list[dict[str, Any]] = []
+
     async def _step(stage: str) -> None:
         if progress_callback is not None:
             try:
@@ -120,6 +179,18 @@ async def evaluate_pa_case(
                 await on_partial(partial)
             except Exception as e:
                 log.warning("orchestrator.on_partial_failed", error=str(e))
+
+    async def _emit_metrics() -> None:
+        """Emit the current snapshot of the metrics blob so the row is up to
+        date even if a downstream stage fails before we reach the bottom of
+        the pipeline."""
+        await _emit({
+            "metrics": _build_metrics(
+                started_at=run_started,
+                stages=list(stages),
+                adjudication_leaves=list(adjudication_leaves),
+            ),
+        })
 
     await _step("parsing")
     parsed = parse_pas_bundle(bundle_data)
@@ -142,6 +213,7 @@ async def evaluate_pa_case(
         # One DocumentReference + Binary per case in the prototype. For
         # multi-doc cases we'd merge ExtractedFacts; keep scope to first doc.
         first_doc = next(iter(documents.values()))
+        intake_start = time.perf_counter()
         try:
             intake = await run_intake(first_doc)
             case_facts.extracted = intake.facts
@@ -150,7 +222,14 @@ async def evaluate_pa_case(
                 citations_passed=intake.citation_passed,
                 citations_failed=intake.citation_failed,
             )
+            stages.append(_stage_metrics(
+                "intake",
+                time.perf_counter() - intake_start,
+                intake.usage,
+                llm_calls=1,
+            ))
             await _emit({"extracted_facts": intake.facts.model_dump()})
+            await _emit_metrics()
         except Exception as e:
             log.error("orchestrator.intake_failed", error=str(e))
 
@@ -186,6 +265,7 @@ async def evaluate_pa_case(
 
     # Adjudicate
     await _step("adjudicating")
+    adj_start = time.perf_counter()
     adjudication = await adjudicate_all(
         criteria_root=policy.criteria,
         exclusions=policy.exclusions,
@@ -193,6 +273,37 @@ async def evaluate_pa_case(
         branch=selection.branch,
         policy=policy,
     )
+
+    # Per-leaf breakdown — used by the Performance page's expand row. Each
+    # entry carries the verdict, iteration count (== number of agent-loop
+    # LLM calls; 0 means resolved by the deterministic short-circuit), and
+    # the leaf's own Usage. Excludes (ID prefixed "X") and leaves share one
+    # list so the UI just sorts by cost.
+    adj_llm_calls = 0
+    for nid, iters in adjudication.iterations.items():
+        u = adjudication.leaf_usages.get(nid, Usage())
+        verdict = (
+            adjudication.leaf_verdicts.get(nid)
+            or adjudication.exclusion_verdicts.get(nid)
+        )
+        adjudication_leaves.append({
+            "criterion_id": nid,
+            "kind": "exclusion" if nid in adjudication.exclusion_verdicts else "leaf",
+            "verdict": verdict.verdict if verdict else None,
+            "iterations": iters,
+            "tokens_in": u.input_tokens,
+            "tokens_out": u.output_tokens,
+            "cache_read": u.cache_read_tokens,
+            "cache_creation": u.cache_creation_tokens,
+            "cost_usd": round(u.cost_usd, 6),
+        })
+        adj_llm_calls += iters
+    stages.append(_stage_metrics(
+        "adjudication",
+        time.perf_counter() - adj_start,
+        adjudication.total_usage,
+        llm_calls=adj_llm_calls,
+    ))
 
     await _emit({
         "criteria_evaluation": {
@@ -204,6 +315,7 @@ async def evaluate_pa_case(
             },
         },
     })
+    await _emit_metrics()
 
     # Roll up
     leaf_verdict_strs = {cid: v.verdict for cid, v in adjudication.leaf_verdicts.items()}
@@ -220,6 +332,7 @@ async def evaluate_pa_case(
 
     # Reviewer
     await _step("reviewing")
+    rev_start = time.perf_counter()
     reviewer = await review_case(
         policy=policy,
         determination=determination,
@@ -227,6 +340,12 @@ async def evaluate_pa_case(
         exclusion_verdicts=adjudication.exclusion_verdicts,
         case=case_facts,
     )
+    stages.append(_stage_metrics(
+        "reviewer",
+        time.perf_counter() - rev_start,
+        reviewer.usage,
+        llm_calls=reviewer.iterations,
+    ))
 
     await _emit({
         "outcome": determination.outcome,
@@ -254,6 +373,13 @@ async def evaluate_pa_case(
 
     await _emit({"pas_response_bundle": response.bundle})
 
+    final_metrics = _build_metrics(
+        started_at=run_started,
+        stages=list(stages),
+        adjudication_leaves=list(adjudication_leaves),
+    )
+    await _emit({"metrics": final_metrics})
+
     return CaseRun(
         case_id=case_id,
         parsed_in=parsed,
@@ -264,6 +390,7 @@ async def evaluate_pa_case(
         determination=determination,
         reviewer=reviewer,
         response=response,
+        metrics=final_metrics,
     )
 
 

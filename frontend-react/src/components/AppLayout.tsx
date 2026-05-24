@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Hospital, Inbox, Stethoscope } from "lucide-react";
+import { Activity, Gauge, Hospital, Inbox, Stethoscope } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -34,6 +34,7 @@ const navItems = [
   { to: "/", label: "Home", icon: Activity, end: true },
   { to: "/doctor", label: "Doctor", icon: Stethoscope },
   { to: "/payer", label: "Payer Inbox", icon: Inbox },
+  { to: "/performance", label: "Performance", icon: Gauge },
 ];
 
 export function AppLayout() {

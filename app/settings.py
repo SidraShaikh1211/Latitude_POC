@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # exists in the wire trace.
     payer_pas_base_url: str = "http://127.0.0.1:8000"
 
+    # Where the payer POSTs the ClaimResponse Bundle back to the doctor once
+    # adjudication finishes. Symmetric to payer_pas_base_url — the round-trip
+    # is two A2A HTTP calls, not one synchronous response.
+    doctor_callback_base_url: str = "http://127.0.0.1:8000"
+
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",

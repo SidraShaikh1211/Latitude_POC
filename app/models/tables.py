@@ -54,6 +54,20 @@ class Case(Base):
     determination: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     pas_response_bundle: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Per-stage performance metrics emitted by the orchestrator. Shape:
+    #   {
+    #     "duration_seconds": float,
+    #     "totals": {tokens_in, tokens_out, cache_read, cache_creation,
+    #                cost_usd, llm_calls, cache_hit_rate},
+    #     "stages": [
+    #        {name, duration_seconds, tokens_in, tokens_out, cache_read,
+    #         cache_creation, cost_usd, llm_calls},
+    #        ...
+    #     ],
+    #     "adjudication_leaves": [{criterion_id, iterations, ...usage}],
+    #   }
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -86,12 +100,17 @@ class Submission(Base):
 
     Lifecycle:
         extracting_metadata → bundle_ready → sending → sent
-                                                     ↘ failed
+            → awaiting_payer_response → payer_responded
+                                      ↘ payer_failed
+                                      ↘ failed (doctor-side)
 
-    A `Submission` becomes `sent` once the doctor's bundle has been handed
-    off to the payer via POST /fhir/Claim/$submit. At that point
-    `payer_case_id` is populated and the doctor UI switches to polling the
-    Case row for the rest of the pipeline.
+    The doctor's bundle is POSTed to the payer (`sent`), then the doctor row
+    waits in `awaiting_payer_response` until the payer POSTs the
+    `ClaimResponse` Bundle back to `/v1/doctor/inbound/claim-response`. That
+    second POST writes the outcome / narrative / missing-info / raw
+    ClaimResponse onto the Submission row and flips state to
+    `payer_responded`. No doctor → payer cross-coupling at the UI layer; the
+    doctor UI reads its own Submission row only.
     """
 
     __tablename__ = "submissions"
@@ -104,6 +123,14 @@ class Submission(Base):
     extracted_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     extraction_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_cost_usd: Mapped[float | None] = mapped_column(nullable=True)
+    # Full Usage breakdown for the metadata-extraction Claude call. Plus
+    # wall-clock duration so the Performance page can show the doctor-side
+    # leg of the per-run cost/time alongside the payer-side metrics on Case.
+    metadata_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_duration_seconds: Mapped[float | None] = mapped_column(nullable=True)
     inbound_bundle: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     bundle_entry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bundle_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -113,6 +140,18 @@ class Submission(Base):
 
     payer_case_id: Mapped[str | None] = mapped_column(
         ForeignKey("cases.id"), nullable=True, index=True
+    )
+
+    # Populated by POST /v1/doctor/inbound/claim-response when the payer
+    # finalises the case. Mirror of the determination block on the Case row,
+    # but persisted on the doctor side so the doctor's UI doesn't have to
+    # call into payer-side endpoints.
+    outcome: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    determination_narrative: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missing_info: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    claim_response_bundle: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    payer_responded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

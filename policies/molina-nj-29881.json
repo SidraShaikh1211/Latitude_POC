@@ -1,0 +1,289 @@
+{
+  "policy_id": "molina-nj-29881",
+  "name": "Knee Arthroscopy with Partial Meniscectomy — Molina NJ NJ-KA-29881",
+  "payer_id": "molina",
+  "version": "1.0",
+  "effective_from": "2024-01-01",
+  "effective_until": null,
+
+  "source": {
+    "pdf_path": "policies/sources/molina-nj-29881.pdf",
+    "total_pages": 2,
+    "publication_url": null,
+    "authority": "Molina Healthcare of New Jersey"
+  },
+
+  "applies_to": {
+    "cpt_codes": ["29881"],
+    "hcpcs_codes": [],
+    "icd10_patterns": ["M23.2*"],
+    "lines_of_business": ["medicaid"],
+    "states": ["NJ"],
+    "age_min": 18,
+    "age_max": null,
+    "settings_of_care": ["outpatient", "ambulatory-surgery-center", "inpatient"],
+    "request_categories": ["surgical"],
+    "branches": {
+      "initial": "Initial request for knee arthroscopy with partial meniscectomy"
+    }
+  },
+
+  "criteria": {
+    "id": "root",
+    "type": "internal",
+    "operator": "ALL",
+    "description": "Medical necessity for CPT 29881 knee arthroscopy with partial meniscectomy. ALL of diagnosis, functional limitation, imaging-or-exam, and failed conservative therapy must be met.",
+    "policy_citation": {
+      "page": 1,
+      "section": "2. Coverage Policy",
+      "quote": "Authorization is approved when ALL of the following criteria are met"
+    },
+    "children": [
+      {
+        "id": "diagnosis",
+        "type": "leaf",
+        "description": "Diagnosis of derangement of meniscus (ICD-10 M23.2*) confirmed by clinical evaluation.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.2 Diagnosis",
+          "quote": "Diagnosis of derangement of meniscus (ICD-10 M23.2*) confirmed by clinical evaluation"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Condition"],
+          "extraction_hints": "Look for a Condition with ICD-10 code matching M23.2* (e.g., M23.200 generic, M23.20X laterality-specific subcodes).",
+          "value_constraints": {
+            "icd10_pattern": "M23.2*"
+          },
+          "evaluator_kind": "diagnosis_code"
+        },
+        "verdict_rubric": {
+          "met": "Patient has a documented Condition resource with ICD-10 code matching M23.2*.",
+          "not_met": "Patient's diagnoses do not include any M23.2* code.",
+          "unclear": "Diagnosis narrative suggests meniscal pathology but no ICD-10 code is attached.",
+          "not_documented": "No diagnostic information available in records."
+        }
+      },
+      {
+        "id": "functional_limitation",
+        "type": "leaf",
+        "description": "Documented functional limitation from the meniscal condition (inability to perform ADLs, knee instability, or pain interfering with daily activity).",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.3 Functional Limitation",
+          "quote": "Functional limitation documented, including but not limited to inability to perform activities of daily living due to knee instability or pain"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Observation", "ClinicalImpression", "Condition"],
+          "extraction_hints": "Find clinician narrative describing impairment of ADLs, work limitation, knee buckling/locking, or pain-limited activity. Functional-status assessments (KOOS, Lysholm) also qualify if available.",
+          "value_constraints": {},
+          "evaluator_kind": "llm_class_membership"
+        },
+        "verdict_rubric": {
+          "met": "Specific ADL or activity limitation is documented (e.g., stair-climbing difficulty, knee giving way, work restriction).",
+          "not_met": "Patient explicitly reports preserved function and no activity limitation.",
+          "unclear": "Generic 'knee pain' documented without specific functional impact.",
+          "not_documented": "No assessment of functional status in records."
+        }
+      },
+      {
+        "id": "imaging_or_exam",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "Either MRI evidence of meniscal pathology OR positive provocative exam findings.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.4 Imaging or Examination",
+          "quote": "At least one of the following must be present"
+        },
+        "children": [
+          {
+            "id": "imaging_or_exam.mri",
+            "type": "leaf",
+            "description": "MRI demonstrating a meniscal tear or other meniscal pathology.",
+            "policy_citation": {
+              "page": 1,
+              "section": "2.4 (a)",
+              "quote": "MRI demonstrating meniscal tear or meniscal pathology"
+            },
+            "evaluation": {
+              "fact_types_needed": ["DiagnosticReport", "Observation"],
+              "extraction_hints": "Look for a knee MRI report describing meniscal tear, degeneration, root tear, bucket-handle tear, or other meniscal pathology.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_imaging_finding"
+            },
+            "verdict_rubric": {
+              "met": "Knee MRI report explicitly describes meniscal tear or meniscal pathology.",
+              "not_met": "MRI of the knee shows no meniscal pathology.",
+              "unclear": "MRI describes intrasubstance signal abnormality without clear tear; report wording ambiguous.",
+              "not_documented": "No MRI of the knee available."
+            }
+          },
+          {
+            "id": "imaging_or_exam.provocative_tests",
+            "type": "leaf",
+            "description": "Positive provocative physical-exam findings consistent with meniscal tear (e.g., McMurray, Thessaly, joint-line tenderness).",
+            "policy_citation": {
+              "page": 1,
+              "section": "2.4 (b)",
+              "quote": "Clinical examination findings consistent with meniscal tear, including positive provocative tests such as McMurray test or Thessaly test"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation", "ClinicalImpression"],
+              "extraction_hints": "Look for documented positive McMurray test, Thessaly test, Apley grind, or joint-line tenderness recorded on physical exam.",
+              "value_constraints": {},
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "Physical exam documents a positive McMurray, Thessaly, or equivalent provocative finding.",
+              "not_met": "Physical exam documented but provocative tests are negative.",
+              "unclear": "Exam mentions 'tenderness' or 'pain with motion' without naming a specific test.",
+              "not_documented": "No documented knee physical examination."
+            }
+          }
+        ]
+      },
+      {
+        "id": "failed_conservative",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Failed conservative therapy: documented NSAID trial AND documented PT (or contraindication).",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.5 Failed Conservative Therapy",
+          "quote": "All of the following must be documented"
+        },
+        "children": [
+          {
+            "id": "failed_conservative.nsaid",
+            "type": "leaf",
+            "description": "Trial of NSAID therapy for a minimum of 4 weeks.",
+            "policy_citation": {
+              "page": 1,
+              "section": "2.5 (a)",
+              "quote": "Trial of non-steroidal anti-inflammatory drug (NSAID) therapy for a minimum of 4 weeks"
+            },
+            "evaluation": {
+              "fact_types_needed": ["MedicationRequest", "MedicationStatement"],
+              "extraction_hints": "Look for ibuprofen, naproxen, diclofenac, meloxicam, celecoxib, ketorolac, etc. Validate the trial is at least 4 weeks via start/end dates or duration narrative.",
+              "value_constraints": {
+                "drug_class": "NSAID",
+                "duration_min_weeks": 4
+              },
+              "evaluator_kind": "llm_with_temporal_constraint"
+            },
+            "verdict_rubric": {
+              "met": "NSAID from the standard class documented for at least 4 weeks (dates or explicit duration).",
+              "not_met": "NSAID documented but duration is <4 weeks.",
+              "unclear": "NSAID documented but duration ambiguous; or non-NSAID analgesic only.",
+              "not_documented": "No analgesic therapy recorded."
+            }
+          },
+          {
+            "id": "failed_conservative.physical_therapy",
+            "type": "internal",
+            "operator": "ONE_OF",
+            "description": "Completed PT (≥6 sessions on the affected knee) OR documented contraindication to PT.",
+            "children": [
+              {
+                "id": "failed_conservative.physical_therapy.completed",
+                "type": "leaf",
+                "description": "Completion of at least 6 physical therapy sessions targeting the affected knee.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "2.5 (b)",
+                  "quote": "completion of a minimum of 6 physical therapy sessions directed at the affected knee"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["Procedure", "Observation"],
+                  "extraction_hints": "Find PT note documenting session count for the affected knee. Acceptable evidence: PT discharge summary, count of visits, or progress note referencing completed sessions.",
+                  "value_constraints": {
+                    "min_count": 6
+                  },
+                  "evaluator_kind": "numeric_count"
+                },
+                "verdict_rubric": {
+                  "met": "PT records or narrative show ≥6 completed sessions targeting the affected knee.",
+                  "not_met": "PT documented but fewer than 6 sessions completed.",
+                  "unclear": "PT mentioned without session count, or sessions targeted a different body region.",
+                  "not_documented": "No PT records available."
+                }
+              },
+              {
+                "id": "failed_conservative.physical_therapy.contraindication",
+                "type": "leaf",
+                "description": "Documented clinical contraindication to physical therapy.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "2.5 (b)",
+                  "quote": "documented contraindication to physical therapy"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["AllergyIntolerance", "Condition", "ClinicalImpression"],
+                  "extraction_hints": "Look for explicit clinician statement that PT is contraindicated (e.g., recent fracture, severe instability, comorbidity making weight-bearing PT unsafe).",
+                  "value_constraints": {},
+                  "evaluator_kind": "llm_class_membership"
+                },
+                "verdict_rubric": {
+                  "met": "Clinician explicitly documents a contraindication to PT for this patient.",
+                  "not_met": "No contraindication; PT is expected per usual care.",
+                  "unclear": "Patient declined PT citing inconvenience or cost without a clinical contraindication.",
+                  "not_documented": "PT not addressed in records."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+
+  "exclusions": [
+    {
+      "id": "X1",
+      "description": "Acute traumatic tear requiring emergent surgical intervention (injury within 72 hours requiring immediate stabilization) — emergency pathway, not PA.",
+      "policy_citation": {
+        "page": 2,
+        "section": "3.1 Acute Emergent",
+        "quote": "The condition is an acute traumatic tear requiring emergent surgical intervention (defined as injury within 72 hours requiring immediate surgical stabilization)"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "Procedure", "ClinicalImpression"],
+        "extraction_hints": "Look for date of injury within 72 hours of submission AND clinician note indicating emergent surgical need (gross instability, locked knee with mechanical block).",
+        "evaluator_kind": "llm_with_temporal_constraint"
+      },
+      "verdict_rubric": {
+        "met": "Injury within 72 hours and clinician documents emergent surgical need.",
+        "not_met": "Chronic or subacute meniscal injury; not emergent.",
+        "unclear": "Recent injury (<72h) but no documentation of emergent need.",
+        "not_documented": "Injury timing or emergent status not addressed."
+      }
+    },
+    {
+      "id": "X2",
+      "description": "Primary indication is non-meniscal pathology (isolated chondral defect, ligamentous injury without meniscal involvement).",
+      "policy_citation": {
+        "page": 2,
+        "section": "3.2 Non-meniscal Pathology",
+        "quote": "The primary indication is non-meniscal pathology (e.g., isolated chondral defect, ligamentous injury without meniscal involvement)"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "DiagnosticReport"],
+        "extraction_hints": "Check imaging and clinical assessment for isolated chondral defect, ACL/PCL/MCL/LCL injury, or other non-meniscal pathology being the primary surgical indication.",
+        "evaluator_kind": "llm_class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Primary indication documented is non-meniscal (chondral, ligamentous) and meniscus is incidental.",
+        "not_met": "Meniscal pathology is clearly the primary indication.",
+        "unclear": "Both meniscal and non-meniscal findings present; primary indication not stated.",
+        "not_documented": "Indication not clearly differentiated in records."
+      }
+    }
+  ],
+
+  "metadata": {
+    "authored_by": "PA Prototype PA Prototype",
+    "authored_at": "2026-05-24",
+    "review_status": "prototype-validated",
+    "notes": "Models Molina NJ Clinical Policy NJ-KA-29881 (Knee Arthroscopy with Partial Meniscectomy)."
+  }
+}

@@ -2,6 +2,7 @@ import type {
   CaseDetail,
   CaseSummary,
   DoctorSubmitResponse,
+  PerformanceRun,
   PolicyDetail,
   PolicySummary,
   Submission,
@@ -57,6 +58,10 @@ export async function getSubmission(submissionId: string): Promise<Submission> {
 
 export async function listSubmissions(): Promise<Submission[]> {
   return json(await fetch(`${API_BASE}/v1/doctor/submissions`));
+}
+
+export async function listMetricsRuns(): Promise<PerformanceRun[]> {
+  return json(await fetch(`${API_BASE}/v1/metrics/runs`));
 }
 
 // ---------------------------------------------------------------------------

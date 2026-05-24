@@ -18,6 +18,7 @@ import asyncio
 import uuid
 from typing import Any
 
+import httpx
 import structlog
 from fastapi import APIRouter, Body, HTTPException, Query
 
@@ -27,6 +28,7 @@ from app.db.engine import session_scope
 from app.models import Case
 from app.orchestrator import evaluate_pa_case
 from app.pas.bundle_parser import BundleParseError
+from app.settings import settings
 
 
 log = structlog.get_logger()
@@ -149,6 +151,15 @@ async def _run_pipeline_async(case_id: str, bundle: dict) -> None:
             case_id=case_id,
             outcome=run.determination.outcome if run.determination else None,
         )
+        # Symmetric A2A: POST the ClaimResponse Bundle back to the doctor
+        # side so the doctor's UI gets the verdict over the wire, not by
+        # reading the payer's Case row. Fire-and-forget — failures are
+        # logged but don't fail the pipeline (the Case row remains the
+        # source of truth payer-side).
+        if run.response is not None:
+            asyncio.create_task(
+                _post_claim_response_to_doctor(case_id, run.response.bundle),
+            )
     except asyncio.TimeoutError:
         log.error("pas.pipeline_timeout", case_id=case_id, deadline=PIPELINE_DEADLINE_SECONDS)
         await _update_case_stage(
@@ -189,6 +200,34 @@ async def _apply_partial(case_id: str, fields: dict[str, Any]) -> None:
         f"case:{case_id}",
         {"type": "partial", "fields": list(fields.keys())},
     )
+
+
+async def _post_claim_response_to_doctor(case_id: str, response_bundle: dict) -> None:
+    """Symmetric A2A callback: POST the ClaimResponse Bundle back to the
+    doctor side so the doctor's UI gets the verdict via HTTP, not by
+    reading the payer's Case row.
+
+    Best-effort: a callback failure does not roll the Case status back.
+    Production would queue a retry; for the prototype we just log loudly.
+    """
+    url = f"{settings.doctor_callback_base_url}/v1/doctor/inbound/claim-response"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=response_bundle)
+            resp.raise_for_status()
+        log.info(
+            "pas.doctor_callback_sent",
+            case_id=case_id,
+            url=url,
+            status_code=resp.status_code,
+        )
+    except Exception as e:
+        log.error(
+            "pas.doctor_callback_failed",
+            case_id=case_id,
+            url=url,
+            error=str(e)[:500],
+        )
 
 
 @router.get("/fhir/ClaimResponse/{case_id}")

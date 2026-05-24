@@ -297,6 +297,10 @@ class FullAdjudication:
     escalations: list[str]
     total_usage: Usage
     iterations: dict[str, int]
+    # Per-leaf/exclusion usage breakdown — surfaced for the Performance
+    # page's "expand to see per-leaf cost" feature. Empty for any leaf
+    # resolved by the deterministic short-circuit (no LLM call).
+    leaf_usages: dict[str, Usage] = field(default_factory=dict)
 
 
 async def adjudicate_all(
@@ -398,23 +402,28 @@ async def adjudicate_all(
     leaf_verdicts: dict[str, CriterionVerdict] = {}
     excl_verdicts: dict[str, CriterionVerdict] = {}
     iterations: dict[str, int] = {}
+    leaf_usages: dict[str, Usage] = {}
     total_usage = Usage()
 
     # Start with the deterministic short-circuit results, then layer LLM results.
     for nid, r in leaf_pre.items():
         leaf_verdicts[nid] = r.verdict
         iterations[nid] = r.iterations
+        leaf_usages[nid] = r.usage
     for nid, r in excl_pre.items():
         excl_verdicts[nid] = r.verdict
         iterations[nid] = r.iterations
+        leaf_usages[nid] = r.usage
 
     for nid, r in leaf_results:
         leaf_verdicts[nid] = r.verdict
         iterations[nid] = r.iterations
+        leaf_usages[nid] = r.usage
         total_usage.add(r.usage)
     for nid, r in excl_results:
         excl_verdicts[nid] = r.verdict
         iterations[nid] = r.iterations
+        leaf_usages[nid] = r.usage
         total_usage.add(r.usage)
 
     log.info(
@@ -438,6 +447,7 @@ async def adjudicate_all(
         escalations=list(case.escalations),
         total_usage=total_usage,
         iterations=iterations,
+        leaf_usages=leaf_usages,
     )
 
 

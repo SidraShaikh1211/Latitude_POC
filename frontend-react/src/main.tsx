@@ -9,6 +9,7 @@ import { Landing } from "@/pages/Landing";
 import { DoctorWorkspace } from "@/pages/DoctorWorkspace";
 import { PayerInbox } from "@/pages/PayerInbox";
 import { PayerCaseDetail } from "@/pages/PayerCaseDetail";
+import { Performance } from "@/pages/Performance";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +31,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="/doctor" element={<DoctorWorkspace />} />
             <Route path="/payer" element={<PayerInbox />} />
             <Route path="/payer/:caseId" element={<PayerCaseDetail />} />
+            <Route path="/performance" element={<Performance />} />
           </Route>
         </Routes>
       </BrowserRouter>

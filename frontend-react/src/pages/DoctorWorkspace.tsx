@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   FileUp,
+  Inbox,
   Loader2,
   Send,
   Upload,
@@ -26,20 +27,29 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { ExtractedMetadataPanel } from "@/components/ExtractedMetadataPanel";
+import { OutcomeBadge } from "@/components/OutcomeBadge";
 import { listSubmissions, submitDoctorPdf } from "@/lib/api";
 import { useSubmissionStream } from "@/lib/sse";
 import type { Submission, SubmissionState } from "@/types/api";
 
 // ---------------------------------------------------------------------------
-// Doctor-side stage map. The doctor's responsibility ends at "sent" — after
-// that the payer owns the case and the doctor follows up on the payer page.
+// Doctor-side stage map. The "doctor push" leg ends at `sent`; once handed
+// off the row sits in `awaiting_payer_response` until the payer POSTs a
+// ClaimResponse Bundle back to /v1/doctor/inbound/claim-response. Both
+// legs are doctor-side state — the doctor card never reads the payer Case.
 // ---------------------------------------------------------------------------
 
 const DOCTOR_STAGE: Record<SubmissionState, { label: string; pct: number }> = {
   extracting_metadata: { label: "📋 Reading your PDF", pct: 15 },
-  bundle_ready: { label: "📦 FHIR Bundle assembled", pct: 55 },
-  sending: { label: "📡 Sending Bundle to payer (PAS $submit)", pct: 80 },
-  sent: { label: "✉️ Payer received the Bundle", pct: 100 },
+  bundle_ready: { label: "📦 FHIR Bundle assembled", pct: 45 },
+  sending: { label: "📡 Sending Bundle to payer (PAS $submit)", pct: 65 },
+  sent: { label: "✉️ Payer received the Bundle", pct: 80 },
+  awaiting_payer_response: {
+    label: "⏳ Awaiting payer ClaimResponse",
+    pct: 90,
+  },
+  payer_responded: { label: "✅ Payer ClaimResponse received", pct: 100 },
+  payer_failed: { label: "❌ Payer reported failure", pct: 100 },
   failed: { label: "❌ Doctor-side failure", pct: 100 },
 };
 
@@ -202,9 +212,17 @@ function SubmissionsList({
   );
 }
 
-// Subscribes to the submission's SSE stream until it reaches `sent` or
-// `failed`. We deliberately do NOT subscribe to the payer case here — the
-// payer's progress and outcome live on the payer page.
+// Subscribes to the submission's SSE stream until it reaches a terminal
+// state (`payer_responded` | `payer_failed` | `failed`). The doctor card
+// reads its own Submission row only — the verdict reaches it via the
+// payer's HTTP callback (leg 2 of the A2A round trip), persisted into the
+// Submission row by /v1/doctor/inbound/claim-response.
+const SUBMISSION_TERMINAL: SubmissionState[] = [
+  "payer_responded",
+  "payer_failed",
+  "failed",
+];
+
 function LiveSubmissionCard({ initial }: { initial: Submission }) {
   const sub = useSubmissionStream(initial.submission_id, initial) ?? initial;
   return <SubmissionCard submission={sub} />;
@@ -215,8 +233,7 @@ function LiveSubmissionCard({ initial }: { initial: Submission }) {
 // ---------------------------------------------------------------------------
 
 function SubmissionCard({ submission }: { submission: Submission }) {
-  const doctorActive =
-    submission.state !== "sent" && submission.state !== "failed";
+  const active = !SUBMISSION_TERMINAL.includes(submission.state);
 
   const metaParts: string[] = [];
   if (submission.patient_display) {
@@ -225,6 +242,11 @@ function SubmissionCard({ submission }: { submission: Submission }) {
   if (submission.cpt_code) {
     metaParts.push(`CPT ${submission.cpt_code}`);
   }
+
+  const showPayerPanel =
+    submission.state === "awaiting_payer_response" ||
+    submission.state === "payer_responded" ||
+    submission.state === "payer_failed";
 
   return (
     <Card>
@@ -235,7 +257,7 @@ function SubmissionCard({ submission }: { submission: Submission }) {
               Submission{" "}
               <code className="text-primary">{submission.submission_id}</code>
             </CardTitle>
-            {doctorActive && (
+            {active && (
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
             )}
           </div>
@@ -248,6 +270,7 @@ function SubmissionCard({ submission }: { submission: Submission }) {
       </CardHeader>
       <CardContent className="space-y-5">
         <DoctorPhase submission={submission} />
+        {showPayerPanel && <PayerResponsePanel submission={submission} />}
         {submission.state === "failed" && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
@@ -268,14 +291,17 @@ function SubmissionCard({ submission }: { submission: Submission }) {
 
 function DoctorPhase({ submission }: { submission: Submission }) {
   const info = DOCTOR_STAGE[submission.state];
+  const handedOff =
+    submission.state === "sent" ||
+    submission.state === "awaiting_payer_response" ||
+    submission.state === "payer_responded" ||
+    submission.state === "payer_failed";
 
   return (
     <div className="rounded-md border border-sky-200 bg-sky-50/30 p-4 space-y-3">
       <header className="flex items-center justify-between">
         <Badge variant="info">🩺 Doctor side</Badge>
-        {submission.state === "sent" && (
-          <Badge variant="success">✓ Handed off</Badge>
-        )}
+        {handedOff && <Badge variant="success">✓ Handed off</Badge>}
       </header>
 
       <div className="flex items-center justify-between">
@@ -292,7 +318,13 @@ function DoctorPhase({ submission }: { submission: Submission }) {
         {submission.state === "sending" &&
           "HTTP POST in flight: the Bundle is on the wire."}
         {submission.state === "sent" &&
-          "Bundle delivered. The payer now owns the case."}
+          "Bundle delivered. Waiting for the payer's ClaimResponse callback."}
+        {submission.state === "awaiting_payer_response" &&
+          "Payer is adjudicating. We'll receive the ClaimResponse over HTTP when it's ready."}
+        {submission.state === "payer_responded" &&
+          "Payer POSTed the ClaimResponse Bundle back. The verdict is below."}
+        {submission.state === "payer_failed" &&
+          "Payer reported a failure during adjudication."}
       </p>
 
       <ExtractedMetadataPanel
@@ -325,6 +357,107 @@ function DoctorPhase({ submission }: { submission: Submission }) {
         </Accordion>
       )}
 
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Payer-response phase
+//
+// Reads exclusively off the Submission row — fields populated by the
+// payer's POST /v1/doctor/inbound/claim-response. No useCaseStream, no
+// cross-page links: the doctor side learns the verdict the same way the
+// payer learned about the case (an HTTP POST of a FHIR Bundle).
+// ---------------------------------------------------------------------------
+
+function PayerResponsePanel({ submission }: { submission: Submission }) {
+  const isWaiting = submission.state === "awaiting_payer_response";
+  const isFailed = submission.state === "payer_failed";
+  const missingInfo = submission.missing_info ?? [];
+
+  return (
+    <div className="rounded-md border border-violet-200 bg-violet-50/40 p-4 space-y-3">
+      <header className="flex items-center justify-between">
+        <Badge variant="violet">🏥 Payer response</Badge>
+        {isWaiting && (
+          <span className="flex items-center gap-2 text-xs text-violet-700">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            waiting for ClaimResponse over HTTP
+          </span>
+        )}
+        {submission.state === "payer_responded" && submission.outcome && (
+          <OutcomeBadge outcome={submission.outcome} />
+        )}
+      </header>
+
+      {isWaiting && (
+        <p className="text-xs text-muted-foreground flex items-center gap-2">
+          <Inbox className="h-3.5 w-3.5" />
+          The payer will POST a Da Vinci PAS{" "}
+          <code>ClaimResponse</code> Bundle to{" "}
+          <code>/v1/doctor/inbound/claim-response</code> when adjudication
+          completes — same wire format the doctor sent in.
+        </p>
+      )}
+
+      {isFailed && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Payer-side failure</AlertTitle>
+          <AlertDescription>
+            {submission.error_message ??
+              "The payer reported a failure during adjudication."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {submission.determination_narrative && (
+        <div>
+          <h4 className="font-semibold text-sm mb-1">Reviewer narrative</h4>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">
+            {submission.determination_narrative}
+          </p>
+        </div>
+      )}
+
+      {missingInfo.length > 0 && (
+        <div className="space-y-2">
+          <h4 className="font-semibold text-sm">
+            Information requested ({missingInfo.length})
+          </h4>
+          {missingInfo.map((mi) => (
+            <div key={mi.id} className="rounded-md border p-3 bg-amber-50">
+              <p className="text-xs text-muted-foreground">
+                <code>{mi.id}</code> · criterion{" "}
+                <code>{mi.criterion_id}</code>
+              </p>
+              <p className="text-sm mt-1">{mi.request}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {submission.claim_response_bundle && (
+        <Accordion type="single" collapsible>
+          <AccordionItem value="claim-response">
+            <AccordionTrigger>
+              <span className="flex items-center gap-2 text-sm">
+                <Inbox className="h-3.5 w-3.5" />
+                📥 Inbound ClaimResponse Bundle
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <p className="text-xs text-muted-foreground mb-2">
+                The Da Vinci PAS <code>ClaimResponse</code> Bundle as it
+                arrived from the payer.
+              </p>
+              <pre className="quote-block max-h-80 overflow-auto">
+                {JSON.stringify(submission.claim_response_bundle, null, 2)}
+              </pre>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      )}
     </div>
   );
 }

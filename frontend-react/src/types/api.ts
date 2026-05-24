@@ -174,12 +174,21 @@ export interface CaseDetail extends CaseSummary {
   updated_at: string | null;
 }
 
-// Doctor-side submission states (separate from the payer's Case)
+// Doctor-side submission states (separate from the payer's Case).
+//
+// Lifecycle:
+//   extracting_metadata → bundle_ready → sending → sent
+//       → awaiting_payer_response → payer_responded
+//                                 ↘ payer_failed
+//                                 ↘ failed (doctor-side)
 export type SubmissionState =
   | "extracting_metadata"
   | "bundle_ready"
   | "sending"
   | "sent"
+  | "awaiting_payer_response"
+  | "payer_responded"
+  | "payer_failed"
   | "failed";
 
 export interface Submission {
@@ -196,6 +205,14 @@ export interface Submission {
   patient_display: string | null;
   cpt_code: string | null;
   payer_case_id: string | null;
+  // Populated by the payer's ClaimResponse callback (POST
+  // /v1/doctor/inbound/claim-response). The doctor UI reads these directly
+  // off the Submission row — no cross-coupling to the payer's Case.
+  outcome: Outcome | null;
+  determination_narrative: string | null;
+  missing_info: Array<{ id: string; criterion_id: string; request: string }> | null;
+  claim_response_bundle: Record<string, unknown> | null;
+  payer_responded_at: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -229,4 +246,59 @@ export interface DoctorSubmitResponse {
   submission_id: string;
   state: SubmissionState;
   pdf_filename: string;
+}
+
+// Performance / metrics — one entry per end-to-end run (doctor + payer joined).
+
+export interface MetricsStage {
+  name: string;
+  side?: "doctor" | "payer";
+  duration_seconds: number;
+  tokens_in: number;
+  tokens_out: number;
+  cache_read: number;
+  cache_creation: number;
+  cost_usd: number;
+  llm_calls: number;
+}
+
+export interface AdjudicationLeafMetric {
+  criterion_id: string;
+  kind: "leaf" | "exclusion";
+  verdict: Verdict | null;
+  iterations: number;
+  tokens_in: number;
+  tokens_out: number;
+  cache_read: number;
+  cache_creation: number;
+  cost_usd: number;
+}
+
+export interface MetricsTotals {
+  tokens_in: number;
+  tokens_out: number;
+  cache_read: number;
+  cache_creation: number;
+  cost_usd: number;
+  llm_calls: number;
+  cache_hit_rate: number;
+}
+
+export interface PerformanceRun {
+  submission_id: string;
+  payer_case_id: string | null;
+  submission_state: SubmissionState;
+  case_status: CaseStatus | null;
+  outcome: Outcome | null;
+  patient_display: string | null;
+  cpt_code: string | null;
+  selected_policy_id: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  totals: MetricsTotals;
+  duration_seconds: number;
+  doctor_duration_seconds: number;
+  payer_duration_seconds: number;
+  stages: MetricsStage[];
+  adjudication_leaves: AdjudicationLeafMetric[];
 }

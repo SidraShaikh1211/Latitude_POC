@@ -4,13 +4,24 @@ import {
   caseEventsUrl,
   submissionEventsUrl,
 } from "@/lib/api";
-import type { CaseDetail, Submission } from "@/types/api";
+import type { CaseDetail, Submission, SubmissionState } from "@/types/api";
+
+// Lifecycle terminals for the doctor submission. `sent` is intentionally
+// NOT terminal: after the push leg lands, the row sits in
+// `awaiting_payer_response` until the payer POSTs the ClaimResponse Bundle
+// back, at which point the row flips to `payer_responded`.
+const TERMINAL_SUBMISSION_STATES: SubmissionState[] = [
+  "payer_responded",
+  "payer_failed",
+  "failed",
+];
 
 /**
  * Subscribe to the SSE stream of submission lifecycle events.
  *
  * The backend emits a `snapshot` first (current state), then `update`
- * events for each state change. The stream closes after `sent` or `failed`.
+ * events for each state change. The stream closes on a terminal state
+ * (`payer_responded` | `payer_failed` | `failed`).
  *
  * Returns the latest Submission snapshot, or `undefined` until the first
  * event arrives.
@@ -30,7 +41,7 @@ export function useSubmissionStream(
     lastIdRef.current = submissionId;
 
     // If the seed snapshot is already terminal, don't open a stream.
-    if (initial && (initial.state === "sent" || initial.state === "failed")) {
+    if (initial && TERMINAL_SUBMISSION_STATES.includes(initial.state)) {
       return;
     }
 
