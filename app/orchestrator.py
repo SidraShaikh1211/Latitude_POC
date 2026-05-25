@@ -31,6 +31,7 @@ from app.determination.reviewer import ReviewerOutput, ReviewResult, review_case
 from app.determination.rollup import NodeVerdict, rollup
 from app.extraction.intake import IntakeResult, run_intake
 from app.extraction.pdf import ExtractedDocument, extract_pdf
+from app.extraction.reconcile import reconcile_metadata_vs_intake
 from app.llm.client import Usage
 from app.pas.bundle_builder import BuiltResponse, build_pas_response_bundle
 from app.pas.bundle_parser import ParsedBundle, parse_pas_bundle
@@ -230,6 +231,18 @@ async def evaluate_pa_case(
             ))
             await _emit({"extracted_facts": intake.facts.model_dump()})
             await _emit_metrics()
+
+            # Deterministic reconciliation: surface metadata/intake code
+            # mismatches as advisory warnings the reviewer can reference.
+            recon_warnings = reconcile_metadata_vs_intake(parsed.context, intake.facts)
+            case_facts.intake_reconciliation_warnings = recon_warnings
+            if recon_warnings:
+                log.info(
+                    "orchestrator.reconciliation_warnings",
+                    count=len(recon_warnings),
+                    warnings=recon_warnings,
+                )
+                await _emit({"intake_reconciliation_warnings": recon_warnings})
         except Exception as e:
             log.error("orchestrator.intake_failed", error=str(e))
 
@@ -275,6 +288,7 @@ async def evaluate_pa_case(
         case=case_facts,
         branch=selection.branch,
         policy=policy,
+        case_context=parsed.context,
     )
 
     # Per-leaf breakdown — used by the Performance page's expand row. Each

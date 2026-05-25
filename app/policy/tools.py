@@ -51,6 +51,10 @@ class CaseFacts:
     documents: dict[str, ExtractedDocument] = field(default_factory=dict)
     escalations: list[str] = field(default_factory=list)
     service_date: date | None = None
+    # Advisory warnings from the deterministic metadata-vs-intake reconciliation
+    # (app.extraction.reconcile). Distinct from `escalations` so the Decider
+    # does not treat advisory mismatches as human-review triggers.
+    intake_reconciliation_warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

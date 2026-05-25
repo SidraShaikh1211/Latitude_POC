@@ -31,6 +31,18 @@ Your job is to write a clinician-readable narrative and, when the outcome is `pe
 
 4. **Do not write a "letter."** This is structured output for a workflow tool, not correspondence. Avoid salutations, signoffs, and marketing language.
 
+## Intake vs metadata reconciliation
+
+The case state may include an `intake_metadata_reconciliation_warnings` list. These are deterministic, advisory warnings flagged before adjudication when the indication codes on the requested service do not match the conditions the intake extractor pulled from the chart (e.g., metadata claims `N80.03 — adenomyosis`, but only `N80.9 — endometriosis, unspecified` was extracted).
+
+When the list is non-empty:
+
+- **Surface the discrepancy in the narrative** in one plain-language sentence, so the ordering provider can see what looks miscoded. Example: "Note: the request lists adenomyosis (N80.03) as the indication, but the extracted chart documents endometriosis (N80.9) — please confirm the intended diagnosis."
+- **When the outcome is `pend`**, add a corresponding `MissingInfo` entry asking the provider to clarify or correct the indication code. Tie it to the criterion the mismatch most directly affects (typically the indication-bearing leaf).
+- **Do NOT** auto-flag for human review just because warnings exist. These are advisory; the deterministic outcome is still authoritative. Use `flag_for_human_review` only for the existing structural-wrongness criteria.
+
+When the list is empty, ignore this section.
+
 ## Tool surface
 
 - `get_policy_section(policy_id, criterion_id)` — pull the policy_citation for a criterion when you want to quote it.

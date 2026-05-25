@@ -19,7 +19,7 @@ That keeps the digest small (~1-3k tokens) and forces verifiable citations.
 from __future__ import annotations
 
 from app.extraction.intake import ExtractedFacts
-from app.pas.bundle_parser import FactCollection
+from app.pas.bundle_parser import CaseContext, FactCollection
 from app.policy.tools import (
     CaseFacts,
     _bundle_effective_date,
@@ -34,14 +34,26 @@ MAX_ITEMS_PER_SECTION = 40
 MAX_LINE_CHARS = 220
 
 
-def build_evidence_digest(case: CaseFacts) -> str:
+def build_evidence_digest(
+    case: CaseFacts,
+    context: CaseContext | None = None,
+    branch: str | None = None,
+) -> str:
     """Render a compact bulleted digest of everything the adjudicator can see.
 
-    Order: documents → patient → conditions → observations → medications →
-    procedures → allergies → diagnostic reports. Each section is capped so a
-    pathological case can't blow out the prompt.
+    Order: requested service (when context given) → documents → patient →
+    conditions → observations → medications → procedures → allergies →
+    diagnostic reports. Each section is capped so a pathological case can't
+    blow out the prompt.
+
+    `context` and `branch` are optional so single-leaf test paths
+    (`adjudicate_criterion` building its own digest) keep working.
     """
     sections: list[str] = []
+
+    # --- Requested service (only when CaseContext is wired in)
+    if context is not None:
+        sections.append(_requested_service_block(context, branch))
 
     # --- Documents
     if case.documents:
@@ -102,6 +114,45 @@ def build_evidence_digest(case: CaseFacts) -> str:
 # ---------------------------------------------------------------------------
 # Section renderers — each returns a list of bullet lines.
 # ---------------------------------------------------------------------------
+
+
+def _requested_service_block(ctx: CaseContext, branch: str | None) -> str:
+    """Render the REQUESTED SERVICE bullet block.
+
+    This is the block leaf adjudicators use to (a) tell the doctor's *request*
+    apart from prior clinical events in the digest, (b) do time math against
+    the service date without a tool call, (c) cross-check the body site against
+    Procedure/Observation body_site fields, and (d) reject circular citations
+    that quote the request itself as evidence of the indication (see SKILL.md
+    "Using the REQUESTED SERVICE block").
+    """
+    indications = ctx.requested_indication_icd10_codes
+    primary_code = indications[0] if indications else ""
+    secondary_codes = indications[1:]
+    cpt_line = f"- CPT: {ctx.cpt_code}"
+    if ctx.cpt_display:
+        cpt_line += f" — {ctx.cpt_display}"
+    lines = [cpt_line]
+    if primary_code:
+        lines.append(f"- Primary indication: {_fmt_indication(primary_code, ctx.indication_displays)}")
+    if secondary_codes:
+        rendered = "; ".join(
+            _fmt_indication(c, ctx.indication_displays) for c in secondary_codes
+        )
+        lines.append(f"- Secondary indications: {rendered}")
+    lines.append(f"- Service date: {ctx.service_date.isoformat()}")
+    if ctx.body_site:
+        lines.append(f"- Body site: {ctx.body_site}")
+    lines.append(f"- Urgency: {ctx.urgency}")
+    lines.append(f"- Care setting: {ctx.care_setting}")
+    if branch:
+        lines.append(f"- Branch: {branch}")
+    return "REQUESTED SERVICE:\n" + "\n".join(lines)
+
+
+def _fmt_indication(code: str, displays: dict[str, str]) -> str:
+    disp = displays.get(code, "").strip()
+    return f"{code} — {disp}" if disp else code
 
 
 def _patient_line(bf: FactCollection, ex: ExtractedFacts | None) -> str:

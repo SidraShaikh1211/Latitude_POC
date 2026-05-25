@@ -18,7 +18,9 @@ from app.extraction.intake import (
     ExtractedPatient,
     ExtractedProcedure,
 )
-from app.pas.bundle_parser import FactCollection
+from datetime import date
+
+from app.pas.bundle_parser import CaseContext, FactCollection
 from app.policy.evidence_digest import (
     MAX_ITEMS_PER_SECTION,
     MAX_LINE_CHARS,
@@ -138,3 +140,103 @@ def test_digest_empty_case_still_renders_safely():
     case = CaseFacts(bundle_facts=FactCollection())
     d = build_evidence_digest(case)
     assert d.startswith("CASE EVIDENCE DIGEST")
+
+
+# ---------------------------------------------------------------------------
+# REQUESTED SERVICE block (only rendered when CaseContext is supplied)
+# ---------------------------------------------------------------------------
+
+
+def _ctx(**overrides) -> CaseContext:
+    defaults = dict(
+        cpt_code="58571",
+        icd10_codes=["N80.03", "N94.6"],
+        payer_id="molina",
+        line_of_business="medicaid",
+        state="NY",
+        patient_age=42,
+        service_date=date(2026, 4, 8),
+        urgency="standard",
+        care_setting="outpatient",
+        request_category="surgical",
+        requested_indication_icd10_codes=["N80.03", "N94.6"],
+        cpt_display="Laparoscopic total hysterectomy with tubes/ovaries",
+        indication_displays={
+            "N80.03": "Adenomyosis of uterus",
+            "N94.6": "Dysmenorrhea",
+        },
+        body_site="pelvis",
+    )
+    defaults.update(overrides)
+    return CaseContext(**defaults)
+
+
+def test_no_context_keeps_existing_digest_shape():
+    """Backwards-compat: omitting context yields a digest that does NOT
+    contain the REQUESTED SERVICE block — single-leaf test paths and any
+    legacy caller keep working unchanged."""
+    d = build_evidence_digest(_full_case())
+    assert "REQUESTED SERVICE" not in d
+
+
+def test_requested_service_block_renders_first():
+    """When context is supplied, REQUESTED SERVICE sits at the very top of
+    the digest body — before DOCUMENTS or any clinical section."""
+    d = build_evidence_digest(_full_case(), context=_ctx(), branch="initial")
+    body = d.split("\n", 1)[1]  # drop the boilerplate header line
+    assert body.lstrip().startswith("REQUESTED SERVICE:")
+    # And the requested-service block precedes the first clinical section.
+    assert d.index("REQUESTED SERVICE:") < d.index("PATIENT:")
+
+
+def test_requested_service_block_populates_all_fields():
+    d = build_evidence_digest(_full_case(), context=_ctx(), branch="initial")
+    assert "- CPT: 58571 — Laparoscopic total hysterectomy with tubes/ovaries" in d
+    assert "- Primary indication: N80.03 — Adenomyosis of uterus" in d
+    assert "- Secondary indications: N94.6 — Dysmenorrhea" in d
+    assert "- Service date: 2026-04-08" in d
+    assert "- Body site: pelvis" in d
+    assert "- Urgency: standard" in d
+    assert "- Care setting: outpatient" in d
+    assert "- Branch: initial" in d
+
+
+def test_secondary_indications_line_omitted_when_only_primary():
+    ctx = _ctx(
+        icd10_codes=["N80.03"],
+        requested_indication_icd10_codes=["N80.03"],
+        indication_displays={"N80.03": "Adenomyosis of uterus"},
+    )
+    d = build_evidence_digest(_full_case(), context=ctx)
+    assert "Primary indication: N80.03 — Adenomyosis of uterus" in d
+    assert "Secondary indications:" not in d
+
+
+def test_body_site_line_omitted_when_empty():
+    d = build_evidence_digest(_full_case(), context=_ctx(body_site=""))
+    assert "Body site:" not in d
+
+
+def test_branch_line_omitted_when_branch_is_none():
+    d = build_evidence_digest(_full_case(), context=_ctx(), branch=None)
+    assert "Branch:" not in d
+
+
+def test_indication_falls_back_to_bare_code_when_display_missing():
+    """A requested ICD without a display entry renders as the bare code, not
+    'CODE — '."""
+    ctx = _ctx(
+        requested_indication_icd10_codes=["N80.03", "N94.6"],
+        indication_displays={"N80.03": "Adenomyosis of uterus"},  # N94.6 missing
+    )
+    d = build_evidence_digest(_full_case(), context=ctx)
+    assert "Secondary indications: N94.6\n" in d or "Secondary indications: N94.6" in d
+    # Make sure we didn't produce a dangling " — "
+    assert "N94.6 — " not in d
+
+
+def test_cpt_display_falls_back_to_bare_code():
+    ctx = _ctx(cpt_display="")
+    d = build_evidence_digest(_full_case(), context=ctx)
+    assert "- CPT: 58571\n" in d  # no " — " suffix
+    assert "- CPT: 58571 — " not in d

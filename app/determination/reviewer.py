@@ -264,6 +264,7 @@ def _build_state_payload(
         "triggered_exclusions": triggered_excl,
         "notable_criterion_verdicts": notable,
         "escalation_reasons_from_adjudicator": determination.escalation_reasons,
+        "intake_metadata_reconciliation_warnings": case.intake_reconciliation_warnings,
         "documents_available": list(case.documents.keys()),
     }
     return json.dumps(state, indent=2)

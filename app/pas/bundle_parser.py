@@ -19,10 +19,20 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+import structlog
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.claim import Claim
 from fhir.resources.R4B.coverage import Coverage
 from fhir.resources.R4B.patient import Patient
+
+from app.pas.categorize import (
+    ALLOWED_CATEGORIES,
+    SNOMED_TO_CATEGORY,
+    infer_request_category,
+)
+
+
+log = structlog.get_logger()
 
 
 class BundleParseError(Exception):
@@ -45,6 +55,11 @@ class CaseContext:
     # resolved against Claim.diagnosis). Falls back to `icd10_codes` when the
     # bundle does not link an item to specific diagnoses.
     requested_indication_icd10_codes: list[str] = field(default_factory=list)
+    # Human-readable surfaces for the REQUESTED SERVICE digest block. All
+    # default to empty so existing constructors keep working.
+    cpt_display: str = ""
+    indication_displays: dict[str, str] = field(default_factory=dict)
+    body_site: str = ""
 
 
 @dataclass
@@ -111,16 +126,19 @@ def parse_pas_bundle(bundle_data: dict) -> ParsedBundle:
 
     service_date = _parse_service_date(claim)
     cpt_code = _extract_primary_cpt(claim)
+    cpt_display = _extract_primary_cpt_display(claim)
     dx_index = _build_diagnosis_index(claim)
     icd10_codes = list(dx_index.values())
     requested_indication_icd10_codes = _extract_requested_indication_codes(claim, dx_index)
+    indication_displays = _build_indication_displays(claim)
+    body_site = _extract_body_site(claim, by_type.get("ServiceRequest", []))
     payer_id = _extract_payer_id(coverage)
     line_of_business = _extract_lob(coverage)
     state = _extract_state(coverage, patient)
     age = _compute_age(patient, service_date)
     urgency = _extract_urgency(claim, service_date)
     care_setting, request_category = _extract_setting_and_category(
-        claim, by_type.get("ServiceRequest", [])
+        claim, by_type.get("ServiceRequest", []), cpt_code,
     )
 
     context = CaseContext(
@@ -135,6 +153,9 @@ def parse_pas_bundle(bundle_data: dict) -> ParsedBundle:
         care_setting=care_setting,
         request_category=request_category,
         requested_indication_icd10_codes=requested_indication_icd10_codes,
+        cpt_display=cpt_display,
+        indication_displays=indication_displays,
+        body_site=body_site,
     )
 
     sr_list = by_type.get("ServiceRequest", [])
@@ -201,6 +222,93 @@ def _extract_primary_cpt(claim: dict) -> str:
     if coding:
         return coding[0].get("code", "")
     raise BundleParseError("Claim.item[0].productOrService has no coding")
+
+
+def _extract_primary_cpt_display(claim: dict) -> str:
+    """Best-effort human label for the requested CPT.
+
+    Prefers `productOrService.text` (the sender's chosen wording), falling
+    back to the first `coding[].display`. Returns "" when neither is set —
+    the digest then renders the bare code without a dash.
+    """
+    items = claim.get("item") or []
+    if not items:
+        return ""
+    pos = items[0].get("productOrService") or {}
+    text = (pos.get("text") or "").strip()
+    if text:
+        return text
+    for c in pos.get("coding") or []:
+        disp = (c.get("display") or "").strip()
+        if disp:
+            return disp
+    return ""
+
+
+def _build_indication_displays(claim: dict) -> dict[str, str]:
+    """Map ICD-10 code → display, sourced from each Claim.diagnosis entry.
+
+    Only codes that actually carry a display are inserted. Callers must
+    tolerate a missing key (use `.get(code, "")`).
+    """
+    out: dict[str, str] = {}
+    for dx in claim.get("diagnosis") or []:
+        concept = dx.get("diagnosisCodeableConcept") or {}
+        coding = concept.get("coding") or []
+        code: str | None = None
+        coded_display = ""
+        for c in coding:
+            system = (c.get("system") or "").lower()
+            if "icd-10" in system or "icd10" in system:
+                code = c.get("code")
+                coded_display = (c.get("display") or "").strip()
+                break
+        if not code:
+            continue
+        # `concept.text` is the sender's prose; prefer it over the coding's
+        # canonical display when present.
+        display = (concept.get("text") or "").strip() or coded_display
+        if display:
+            out[code] = display
+    return out
+
+
+def _extract_body_site(claim: dict, srs: list[dict]) -> str:
+    """Free-text body site for the requested service.
+
+    FHIR R4B has `Claim.item.bodySite` as `0..1 CodeableConcept` (singular)
+    and `ServiceRequest.bodySite` as `0..*` (list). We accept either shape
+    in either spot so the parser stays tolerant of senders that don't go
+    through pydantic validation. Returns "" when no body site is documented;
+    the digest then omits the line.
+    """
+    items = claim.get("item") or []
+    if items:
+        site = _first_body_site_text(items[0].get("bodySite"))
+        if site:
+            return site
+    for sr in srs:
+        site = _first_body_site_text(sr.get("bodySite"))
+        if site:
+            return site
+    return ""
+
+
+def _first_body_site_text(bs: dict | list | None) -> str:
+    if not bs:
+        return ""
+    candidates = bs if isinstance(bs, list) else [bs]
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        text = (c.get("text") or "").strip()
+        if text:
+            return text
+        for coding in c.get("coding") or []:
+            disp = (coding.get("display") or "").strip()
+            if disp:
+                return disp
+    return ""
 
 
 def _build_diagnosis_index(claim: dict) -> dict[int, str]:
@@ -341,24 +449,47 @@ def _extract_urgency(claim: dict, service_date: date) -> str:
 
 
 def _extract_setting_and_category(
-    claim: dict, srs: list[dict]
+    claim: dict, srs: list[dict], cpt_code: str
 ) -> tuple[str, str]:
-    # ServiceRequest.category gives us the request category; default to procedural.
-    # Prefer category.text (set by our bundle constructor to one of
-    # surgical / procedural / pharmacy) over the SNOMED code, which is a
-    # categorical label that doesn't map 1:1 to our category vocabulary.
-    allowed = {"pharmacy", "dme", "service", "procedural", "surgical"}
-    category = "procedural"
+    """Hybrid category extraction: trust an explicit sender category when
+    it's recognizable, otherwise derive deterministically from CPT.
+
+    Recognized senders write `ServiceRequest.category.text` as one of our
+    enum strings, or carry one of the SNOMED codes our constructor emits.
+    Unrecognized inputs fall through to `infer_request_category(cpt)` so we
+    never silently default to "procedural" on, e.g., a hysterectomy CPT.
+
+    When sender and inference disagree we keep the sender's value (they
+    have clinical context the CPT-range heuristic doesn't) but log a
+    warning so the audit trail surfaces the divergence.
+    """
+    # Precedence within a ServiceRequest.category entry:
+    #   1. category.text matching our enum (most explicit sender intent)
+    #   2. coding.code matching our enum directly
+    #   3. coding.code mapping through SNOMED_TO_CATEGORY (FHIR-canonical
+    #      fallback for senders that don't write `text`)
+    # First explicit hit across all ServiceRequests wins. The synthetic
+    # constructor pairs `text` with a SNOMED `surgical` placeholder
+    # regardless of the real category, so SNOMED must NOT override text.
+    explicit: str | None = None
     setting = "outpatient"
     for sr in srs:
         for cat in sr.get("category") or []:
+            if explicit is not None:
+                break
             text = (cat.get("text") or "").strip().lower()
-            if text in allowed:
-                category = text
+            if text in ALLOWED_CATEGORIES:
+                explicit = text
+                continue
             for c in cat.get("coding") or []:
-                code = (c.get("code") or "").lower()
-                if code in allowed:
-                    category = code
+                code = (c.get("code") or "").strip()
+                lower = code.lower()
+                if lower in ALLOWED_CATEGORIES:
+                    explicit = lower
+                    break
+                if code in SNOMED_TO_CATEGORY:
+                    explicit = SNOMED_TO_CATEGORY[code]
+                    break
         loc = sr.get("locationCode") or []
         for l in loc:
             for c in l.get("coding") or []:
@@ -369,7 +500,19 @@ def _extract_setting_and_category(
                     setting = "inpatient"
                 elif "office" in code:
                     setting = "office"
-    # Claim.facility may also hint at setting
+
+    inferred = infer_request_category(cpt_code)
+    if explicit is None:
+        category = inferred
+    else:
+        category = explicit
+        if explicit != inferred:
+            log.warning(
+                "bundle.request_category_disagrees",
+                cpt_code=cpt_code,
+                sender=explicit,
+                inferred=inferred,
+            )
     return setting, category
 
 

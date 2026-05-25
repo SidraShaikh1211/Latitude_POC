@@ -23,6 +23,7 @@ import structlog
 
 from app.llm.client import Usage, get_client
 from app.policy.deterministic_eval import try_deterministic_verdict
+from app.pas.bundle_parser import CaseContext
 from app.policy.evidence_digest import build_evidence_digest
 from app.policy.registry import (
     CriterionLeaf,
@@ -312,6 +313,7 @@ async def adjudicate_all(
     parallel: int = 8,
     leaf_budget_seconds: float = 120.0,
     policy: Policy | None = None,
+    case_context: CaseContext | None = None,
 ) -> FullAdjudication:
     """Adjudicate every leaf in the tree and every exclusion in parallel.
 
@@ -366,7 +368,11 @@ async def adjudicate_all(
     )
 
     # Build the per-case digest once; reused (and prompt-cached) for every leaf.
-    digest = build_evidence_digest(case) if (leaves_remaining or excl_remaining) else ""
+    digest = (
+        build_evidence_digest(case, context=case_context, branch=branch)
+        if (leaves_remaining or excl_remaining)
+        else ""
+    )
 
     semaphore = asyncio.Semaphore(parallel)
 
