@@ -196,6 +196,7 @@ def build_pas_bundle(case: L3SyntheticCase) -> dict:
                 ],
                 "item": [{
                     "sequence": 1,
+                    "diagnosisSequence": list(range(1, len(case.icd10_codes) + 1)),
                     "productOrService": {
                         "coding": [{
                             "system": "http://www.ama-assn.org/go/cpt",

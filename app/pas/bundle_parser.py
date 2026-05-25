@@ -230,17 +230,32 @@ def _extract_requested_indication_codes(
 
     The diagnosis-sequence link is the FHIR way to say "this line item is
     requested *for* these specific diagnoses, not the patient's full problem
-    list." When the link is absent (legacy bundles or single-indication
-    cases) we fall back to every ICD-10 the claim carries.
+    list." Da Vinci PAS treats this link as required for preauthorization —
+    without it the payer cannot know which of the patient's diagnoses justify
+    the requested CPT, and the selector would silently match on comorbidities
+    or past-history codes. We raise rather than guess.
     """
     items = claim.get("item") or []
+    # _extract_primary_cpt already errors when items is empty; defensive only.
     if not items:
-        return list(dx_index.values())
+        raise BundleParseError("Claim has no items; cannot extract indication")
     seqs = items[0].get("diagnosisSequence") or []
-    linked = [dx_index[int(s)] for s in seqs if int(s) in dx_index]
-    if linked:
-        return linked
-    return list(dx_index.values())
+    if not seqs:
+        raise BundleParseError(
+            "Claim.item[0].diagnosisSequence is required for PAS "
+            "preauthorization — cannot infer which diagnoses justify the "
+            "requested CPT without it"
+        )
+    int_seqs = [int(s) for s in seqs]
+    linked = [dx_index[s] for s in int_seqs if s in dx_index]
+    if not linked:
+        unresolved = [s for s in int_seqs if s not in dx_index]
+        raise BundleParseError(
+            f"Claim.item[0].diagnosisSequence {unresolved} does not resolve "
+            f"to any Claim.diagnosis entry (available sequences: "
+            f"{sorted(dx_index.keys())})"
+        )
+    return linked
 
 
 def _extract_payer_id(coverage: dict) -> str:

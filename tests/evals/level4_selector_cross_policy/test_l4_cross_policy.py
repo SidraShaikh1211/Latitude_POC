@@ -138,22 +138,21 @@ def test_L4_SEL_07_zepbound_for_minor(reg):
 
 
 def test_L4_SEL_08_endometriosis_goes_to_endometriosis_policy(reg):
-    """Endometriosis-only (no adenomyosis) routes to oregon-hcr-39-endometriosis.
+    """Endometriosis-only (N80.1) routes to oregon-hcr-39-endometriosis.
 
-    Both Oregon hysterectomy policies pass Tier 1 because the adenomyosis
-    policy uses a broad N80.* glob that matches N80.1. They tie on Tier 2
-    static specificity (same CPT count, same state, same LOB, but different
-    ICD-pattern counts may already differentiate). Tier 3 — case-aware ICD-10
-    match quality — must pick the endometriosis policy because it lists
-    N80.1 as a literal subcode while the adenomyosis policy only matches
-    via the broad glob."""
+    Since the adenomyosis policy's ICD patterns were tightened to literal
+    codes (N80.03 only, no N80.* glob), it is now filter-eliminated for any
+    non-adenomyosis N80 code. Only the endometriosis policy survives Tier 1,
+    so no tiebreaker runs — `tiebreaker_used` is None. This is the policy-
+    precision fix: cross-policy contamination is eliminated at the filter
+    level, not via a runtime tiebreaker."""
     res = select_policy(
         _ctx(cpt="58570", icd10=["N80.1"], payer="oregon-hca", state="OR", age=42, category="surgical"),
         registry=reg,
     )
     assert res.status == "ok"
     assert res.selected_policy_id == "oregon-hcr-39-endometriosis"
-    assert res.tiebreaker_used == "icd10_match_quality"
+    assert res.tiebreaker_used is None
 
 
 def test_L4_SEL_09_adenomyosis_still_goes_to_adenomyosis_policy(reg):
@@ -169,6 +168,48 @@ def test_L4_SEL_09_adenomyosis_still_goes_to_adenomyosis_policy(reg):
     )
     assert res.status == "ok"
     assert res.selected_policy_id == "oregon-hcr-39"
+
+
+def test_L4_SEL_11_endometriosis_with_unrelated_comorbids(reg):
+    """Indication-only discipline + primary weighting: a hysterectomy request
+    driven by endometriosis can carry symptom secondaries (dysmenorrhea,
+    pelvic pain) that happen to match the *adenomyosis* policy's literal
+    codes. The principal endometriosis ICD must still pull selection to the
+    endometriosis-specific policy.
+
+    This is the Maria-Santos-style scenario: same CPT, both gyn policies pass
+    Phase A (CPT) and Phase B (ICD — endo matches N80.01 literal, adenomyosis
+    matches via N94.6 dysmenorrhea), Phase C (context) doesn't distinguish,
+    and tier 3 has to resolve the tie. With principal-weighting=2x, the
+    literal hit on N80.01 (weight 2) wins over the literal hit on N94.6
+    (weight 1)."""
+    res = select_policy(
+        _ctx(
+            cpt="58571",
+            icd10=["N80.01", "N80.121", "N80.32", "R10.2", "N94.6"],
+            payer="oregon-hca",
+            state="OR",
+            age=46,
+            category="surgical",
+        ),
+        registry=reg,
+    )
+    assert res.status == "ok"
+    assert res.selected_policy_id == "oregon-hcr-39-endometriosis"
+
+
+def test_L4_SEL_12_filter_phases_tagged_in_audit(reg):
+    """Audit trail tags each elimination with the phase that knocked it out.
+    Wrong-CPT policies get `[cpt]`; right-CPT-wrong-ICD get `[icd10]`;
+    right-clinical-wrong-context get `[context]`. Useful for the doctor-
+    facing UI to explain *why* a policy didn't apply."""
+    res = select_policy(
+        _ctx(cpt="62323", icd10=["M54.16"], payer="molina", state="NY", age=50),
+        registry=reg,
+    )
+    assert res.status == "ok"
+    for _pid, reason in res.eliminated:
+        assert reason.startswith(("[cpt]", "[icd10]", "[context]"))
 
 
 def test_L4_SEL_10_diabetes_med_with_obesity_comorbidity(reg):

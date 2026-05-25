@@ -9,11 +9,29 @@ the selected policy, branch (initial / repeat), an audit trail showing
 which policies were eliminated, and `tiebreaker_used` naming the tier that
 resolved the pick (when there was a real tie to resolve).
 
+Filter pipeline (Tier 1) runs in three explicit phases so the audit trail
+distinguishes the *kind* of mismatch. A policy must survive all three to
+become a candidate:
+
+  Phase A — CPT.    Drop policies whose CPT/HCPCS list does not include the
+                    requested code. Wrong-procedure mismatches are tagged
+                    `[cpt]` in the elimination log.
+
+  Phase B — ICD-10. Drop policies whose ICD-10 patterns don't match any of
+                    the *requested-indication* codes (from
+                    Claim.item.diagnosisSequence — required by the parser,
+                    so no fallback to the patient's full problem list).
+                    Tagged `[icd10]`. This is the "right procedure, wrong
+                    indication" elimination.
+
+  Phase C — context. LOB, state, age, care setting, request category,
+                    effective-date window. Tagged `[context]` — the policy
+                    matches clinically but the case is out-of-scope on
+                    geography/eligibility.
+
 Disambiguation ladder — each tier only runs if the previous left ≥2 tied:
 
-  Tier 1  Filter by CPT, ICD-10 (using the *requested-indication* subset
-          from Claim.item.diagnosisSequence), LOB, state, age, care setting,
-          effective date. Eliminates policies that simply don't apply.
+  Tier 1  CPT → ICD-10 → context filter (above).
 
   Tier 2  Static specificity — narrower CPT list, narrower state/LOB lists,
           age bounds, narrower setting list = more specific. Auto-pick if
@@ -103,24 +121,60 @@ def select_policy(
             selection_reason="No policies loaded in registry.",
         )
 
-    # --- Tier 1: filter -----------------------------------------------------
-    candidates: list[Policy] = []
+    # --- Tier 1: filter (CPT → ICD-10 → context, in order) ----------------
     eliminated: list[tuple[str, str]] = []
+
+    after_cpt: list[Policy] = []
     for p in all_policies:
-        reason = _why_eliminated(p, context)
+        reason = _eliminate_by_cpt(p, context)
+        if reason is None:
+            after_cpt.append(p)
+        else:
+            eliminated.append((p.policy_id, f"[cpt] {reason}"))
+
+    if not after_cpt:
+        return SelectionResult(
+            status="no_match",
+            eliminated=eliminated,
+            selection_reason=f"No policy covers CPT {context.cpt_code}.",
+        )
+
+    after_icd: list[Policy] = []
+    for p in after_cpt:
+        reason = _eliminate_by_icd10(p, context)
+        if reason is None:
+            after_icd.append(p)
+        else:
+            eliminated.append((p.policy_id, f"[icd10] {reason}"))
+
+    if not after_icd:
+        return SelectionResult(
+            status="no_match",
+            eliminated=eliminated,
+            selection_reason=(
+                "Policies cover the requested CPT but none match the "
+                "requested-indication ICD-10 codes."
+            ),
+        )
+
+    candidates: list[Policy] = []
+    for p in after_icd:
+        reason = _eliminate_by_context(p, context)
         if reason is None:
             candidates.append(p)
         else:
-            eliminated.append((p.policy_id, reason))
+            eliminated.append((p.policy_id, f"[context] {reason}"))
 
     candidate_ids = [p.policy_id for p in candidates]
 
     if not candidates:
         return SelectionResult(
             status="no_match",
-            candidates_considered=candidate_ids,
             eliminated=eliminated,
-            selection_reason="No policy matched all filter constraints.",
+            selection_reason=(
+                "Policies cover the requested CPT and indication but none "
+                "match on context (LOB / state / age / setting / effective date)."
+            ),
         )
 
     if len(candidates) == 1:
@@ -271,17 +325,52 @@ def _build_ok(
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — filter
+# Tier 1 — filter (CPT → ICD-10 → context)
 # ---------------------------------------------------------------------------
+#
+# Each phase returns either None (policy survives this phase) or a one-line
+# reason it's eliminated. select_policy() walks the three phases in order so
+# the audit log distinguishes "wrong procedure" / "wrong indication" /
+# "right both, wrong context".
+#
+# Payer-name match is intentionally not enforced in any phase: in the
+# current single-tenant demo every loaded policy belongs to "the payer," so
+# requests are matched on the clinical filters only.
 
 
-def _why_eliminated(p: Policy, ctx: CaseContext) -> str | None:
-    """Return a one-line reason a policy is eliminated, or None if it passes."""
-    # Payer-name match intentionally not enforced: in the current single-tenant
-    # demo every loaded policy belongs to "the payer," so requests are matched
-    # on the clinical filters (CPT/ICD-10/state/age/effective date) only.
+def _eliminate_by_cpt(p: Policy, ctx: CaseContext) -> str | None:
+    """Phase A — does this policy cover the requested CPT/HCPCS?"""
+    cpt_codes = set(p.applies_to.cpt_codes) | set(p.applies_to.hcpcs_codes)
+    if cpt_codes and ctx.cpt_code not in cpt_codes:
+        return f"CPT {ctx.cpt_code} not in policy CPTs"
+    return None
 
-    # Effective date window
+
+def _eliminate_by_icd10(p: Policy, ctx: CaseContext) -> str | None:
+    """Phase B — do any of the *requested-indication* ICD-10 codes match a
+    policy ICD-10 pattern?
+
+    Restricted to the diagnoses the requested line item is *for*
+    (Claim.item.diagnosisSequence). The bundle parser enforces that this
+    link is set, so the patient's full problem list never enters selection.
+    """
+    if not p.applies_to.icd10_patterns:
+        return None
+    indication_codes = ctx.requested_indication_icd10_codes
+    if not any(
+        _matches_glob(code, pat)
+        for code in indication_codes
+        for pat in p.applies_to.icd10_patterns
+    ):
+        return (
+            f"none of requested-indication ICD-10 {indication_codes} "
+            f"match patterns {p.applies_to.icd10_patterns}"
+        )
+    return None
+
+
+def _eliminate_by_context(p: Policy, ctx: CaseContext) -> str | None:
+    """Phase C — LOB, state, age, setting, request category, effective date."""
     try:
         eff_from = date.fromisoformat(p.effective_from)
     except Exception:
@@ -296,28 +385,6 @@ def _why_eliminated(p: Policy, ctx: CaseContext) -> str | None:
         return f"service_date {ctx.service_date} before effective_from {eff_from}"
     if eff_until and ctx.service_date > eff_until:
         return f"service_date {ctx.service_date} after effective_until {eff_until}"
-
-    # CPT / HCPCS match
-    cpt_codes = set(p.applies_to.cpt_codes) | set(p.applies_to.hcpcs_codes)
-    if cpt_codes and ctx.cpt_code not in cpt_codes:
-        return f"CPT {ctx.cpt_code} not in policy CPTs"
-
-    # ICD-10 glob match — restrict to the diagnoses the requested line item
-    # is *for* (Claim.item.diagnosisSequence). If the bundle didn't link an
-    # item to specific diagnoses, fall back to the full ICD-10 list.
-    indication_codes = (
-        ctx.requested_indication_icd10_codes or ctx.icd10_codes
-    )
-    if p.applies_to.icd10_patterns:
-        if not any(
-            _matches_glob(code, pat)
-            for code in indication_codes
-            for pat in p.applies_to.icd10_patterns
-        ):
-            return (
-                f"none of requested-indication ICD-10 {indication_codes} "
-                f"match patterns {p.applies_to.icd10_patterns}"
-            )
 
     if p.applies_to.lines_of_business and ctx.line_of_business not in p.applies_to.lines_of_business:
         return f"LOB {ctx.line_of_business} not in {p.applies_to.lines_of_business}"
@@ -391,22 +458,30 @@ def _pattern_specificity(pattern: str) -> float:
     return 10.0 / (1 + wildcards + 2 * trailing_breadth)
 
 
+# The principal indication carries more weight than contributing secondaries
+# — a single accidental literal match on a secondary code (e.g., dysmenorrhea
+# riding along on an endometriosis hysterectomy request) shouldn't outscore
+# a clean match on the primary indication.
+_PRIMARY_WEIGHT = 2.0
+
+
 def _icd10_match_quality(p: Policy, ctx: CaseContext) -> float:
     """Sum, over each requested-indication ICD-10, the best (most precise)
-    pattern in the policy that matched it. Policies with literal subcodes
+    pattern in the policy that matched it. The first code is treated as the
+    principal indication and gets `_PRIMARY_WEIGHT`× the score; subsequent
+    codes are contributing and weighted 1×. Policies with literal subcodes
     targeting the actual case codes beat policies with broad globs."""
-    indication_codes = (
-        ctx.requested_indication_icd10_codes or ctx.icd10_codes
-    )
+    indication_codes = ctx.requested_indication_icd10_codes
     if not indication_codes or not p.applies_to.icd10_patterns:
         return 0.0
     total = 0.0
-    for code in indication_codes:
+    for i, code in enumerate(indication_codes):
+        weight = _PRIMARY_WEIGHT if i == 0 else 1.0
         best = 0.0
         for pat in p.applies_to.icd10_patterns:
             if _matches_glob(code, pat):
                 best = max(best, _pattern_specificity(pat))
-        total += best
+        total += weight * best
     return total
 
 

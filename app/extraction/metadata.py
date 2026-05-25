@@ -21,13 +21,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 from pydantic import BaseModel, Field
 
+from app.extraction import icd10_lookup as icd10
 from app.extraction.pdf import ExtractedDocument
-from app.llm.client import StructuredResult, Usage, get_client
+from app.llm.client import Usage, get_client
 from app.pas.bundle_constructor import ICD10Code, SubmissionData
 
 
@@ -125,6 +126,50 @@ def _build_document_payload(doc: ExtractedDocument, max_chars: int = 60000) -> s
     return "".join(parts)
 
 
+_ICD_TOOL_DEFINITIONS: list[dict] = [
+    {
+        "name": "icd10_lookup",
+        "description": (
+            "Confirm an ICD-10-CM code and return its official tabular "
+            "description. MUST be called for every ICD-10 code you intend "
+            "to emit, before emitting it. The returned `official_description` "
+            "is the source of truth for the `display` field — copy it verbatim."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Candidate ICD-10-CM code, e.g. 'M54.16' or 'N80.1'.",
+                },
+            },
+            "required": ["code"],
+        },
+    },
+    {
+        "name": "icd10_search_by_term",
+        "description": (
+            "Find candidate ICD-10-CM codes whose official descriptions "
+            "contain a clinical term (e.g. 'endometriosis', 'type 2 diabetes'). "
+            "Call this when the chart documents a condition by name without "
+            "giving a literal code. Returns up to ~25 candidates ordered "
+            "least-specific first; pick the most-specific code that fits "
+            "the chart's documented body site / laterality / severity."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "term": {
+                    "type": "string",
+                    "description": "Clinical term to search for, case-insensitive.",
+                },
+            },
+            "required": ["term"],
+        },
+    },
+]
+
+
 async def extract_submission_metadata(
     doc: ExtractedDocument,
     *,
@@ -133,7 +178,9 @@ async def extract_submission_metadata(
 ) -> MetadataResult:
     """Run the metadata extractor on a clinical PDF.
 
-    Returns the structured `ExtractedMetadata` AND a ready-to-use
+    Uses an agent loop so Claude can call `icd10_lookup` / `icd10_search_by_term`
+    to ground every ICD code against the official ICD-10-CM tabular list before
+    emitting. Returns the structured `ExtractedMetadata` AND a ready-to-use
     `SubmissionData` (with PDF bytes attached) that can be handed directly
     to `build_pas_bundle()`.
     """
@@ -143,22 +190,63 @@ async def extract_submission_metadata(
         "Extract the structured submission metadata from this clinical PDF. "
         "The doctor uploaded the PDF without filling any form fields — your "
         "extraction is the only source of patient + service + coverage info. "
-        "Infer CPT codes from clinical context when not explicit. Return "
-        "ExtractedMetadata via the `return_extractedmetadata` tool.\n\n"
+        "Infer CPT codes from clinical context when not explicit. For ICD-10 "
+        "codes, follow the mandatory tool-use workflow in the system prompt: "
+        "call `icd10_search_by_term` / `icd10_lookup` before emitting any "
+        "code. Finalize by calling `return_extractedmetadata`.\n\n"
         f"document_id: {doc.document_id}\n"
         f"page_count: {doc.page_count}\n"
         "Document text follows, with `--- PAGE n ---` markers between pages.\n"
         + doc_text
     )
 
+    return_tool = {
+        "name": "return_extractedmetadata",
+        "description": (
+            "Submit the final ExtractedMetadata. Calling this ends the "
+            "extraction loop. Every ICD-10 code included here must already "
+            "have been confirmed via `icd10_lookup`."
+        ),
+        "input_schema": ExtractedMetadata.model_json_schema(),
+    }
+    tools = _ICD_TOOL_DEFINITIONS + [return_tool]
+
+    captured: dict[str, Any] = {"payload": None}
+
+    async def tool_handler(name: str, payload: dict) -> Any:
+        if name == "return_extractedmetadata":
+            captured["payload"] = payload
+            return {"ok": True}
+        if name == "icd10_lookup":
+            return icd10.lookup(payload.get("code", ""))
+        if name == "icd10_search_by_term":
+            return icd10.search_by_term(payload.get("term", ""))
+        return {"error": f"unknown tool {name!r}"}
+
     client = get_client()
-    result: StructuredResult = await client.structured_output(
+    trace = await client.agent_loop(
         system=system,
         user=user,
-        schema=ExtractedMetadata,
+        tools=tools,
+        tool_handler=tool_handler,
+        max_iterations=12,
         max_tokens=4096,
+        cache_system=True,
+        cache_tools=True,
+        final_tool_name="return_extractedmetadata",
     )
-    meta: ExtractedMetadata = result.parsed  # type: ignore[assignment]
+
+    if captured["payload"] is None:
+        raise RuntimeError(
+            f"metadata extractor did not call return_extractedmetadata within "
+            f"{trace.iterations} iterations (stop_reason={trace.stop_reason!r})"
+        )
+
+    meta: ExtractedMetadata = ExtractedMetadata.model_validate(captured["payload"])
+
+    # Safety net: every emitted ICD must agree with the official tabular list.
+    # If Claude paraphrased the display or emitted a bogus code, fix it now.
+    _validate_and_correct_icd10(meta)
 
     submission = _to_submission_data(meta, pdf_bytes=pdf_bytes, pdf_filename=pdf_filename)
 
@@ -169,18 +257,72 @@ async def extract_submission_metadata(
         primary_icd10=_primary_icd10(meta),
         payer=meta.coverage.payer_id,
         missing_fields=meta.missing_fields,
-        usage_in=result.usage.input_tokens,
-        usage_out=result.usage.output_tokens,
-        cache_read=result.usage.cache_read_tokens,
+        iterations=trace.iterations,
+        tool_calls=len(trace.tool_calls),
+        usage_in=trace.usage.input_tokens,
+        usage_out=trace.usage.output_tokens,
+        cache_read=trace.usage.cache_read_tokens,
     )
 
     return MetadataResult(
         metadata=meta,
         submission=submission,
-        usage=result.usage,
+        usage=trace.usage,
         notes=meta.extraction_notes,
         missing_fields=meta.missing_fields,
     )
+
+
+def _normalize_display(s: str) -> str:
+    """Lowercase + collapse punctuation/whitespace for tolerant comparison."""
+    out = []
+    prev_space = False
+    for ch in s.lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_space = False
+        else:
+            if not prev_space:
+                out.append(" ")
+                prev_space = True
+    return "".join(out).strip()
+
+
+def _validate_and_correct_icd10(meta: ExtractedMetadata) -> None:
+    """Confirm every emitted ICD against the official ICD-10-CM tabular.
+
+    - Invalid code → drop entry, append `icd10:{code}` to `missing_fields`.
+    - Display doesn't match official text → overwrite display with the
+      canonical description and record the correction in `extraction_notes`.
+
+    Mutates `meta` in place. Lenient by design: the mandate in the prompt is
+    the primary defense; this is just the safety net that ensures the bundle
+    never ships a code/display pair that contradicts ICD-10-CM.
+    """
+    kept: list = []
+    corrections: list[str] = []
+    for entry in meta.service_request.icd10_codes:
+        r = icd10.lookup(entry.code)
+        if not r["valid"]:
+            corrections.append(
+                f"dropped ICD '{entry.code}' (not a valid ICD-10-CM code)"
+            )
+            field = f"icd10:{entry.code}"
+            if field not in meta.missing_fields:
+                meta.missing_fields.append(field)
+            continue
+        official = r["official_description"] or ""
+        if _normalize_display(entry.display) != _normalize_display(official):
+            corrections.append(
+                f"corrected display for {entry.code}: "
+                f"{entry.display!r} → {official!r}"
+            )
+            entry.display = official
+        kept.append(entry)
+    meta.service_request.icd10_codes = kept
+    if corrections:
+        note = " ICD-10 validator: " + "; ".join(corrections) + "."
+        meta.extraction_notes = (meta.extraction_notes or "") + note
 
 
 def _primary_icd10(meta: ExtractedMetadata) -> str | None:

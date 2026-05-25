@@ -106,6 +106,58 @@ def test_rejects_missing_required_resource(synthetic_bundle):
         parse_pas_bundle(synthetic_bundle)
 
 
+def _find_claim_item(bundle: dict) -> dict:
+    for entry in bundle["entry"]:
+        if entry["resource"]["resourceType"] == "Claim":
+            return entry["resource"]["item"][0]
+    raise AssertionError("bundle has no Claim resource")
+
+
+def test_requested_indication_codes_resolved_from_diagnosis_sequence(synthetic_bundle):
+    """The happy path: item.diagnosisSequence points at every Claim.diagnosis
+    row, so the indication list mirrors the full ICD-10 list."""
+    parsed = parse_pas_bundle(synthetic_bundle)
+    ctx = parsed.context
+    assert ctx.requested_indication_icd10_codes == [
+        "M54.16", "M79.18", "M47.816"
+    ]
+    # Full problem list still populated for downstream context.
+    assert ctx.icd10_codes == ["M54.16", "M79.18", "M47.816"]
+
+
+def test_requested_indication_narrows_to_linked_diagnoses(synthetic_bundle):
+    """When diagnosisSequence points at a subset, only those codes are
+    treated as the requested indication — past-history codes stay out of
+    selection but remain on `icd10_codes` for audit."""
+    _find_claim_item(synthetic_bundle)["diagnosisSequence"] = [1]
+    parsed = parse_pas_bundle(synthetic_bundle)
+    assert parsed.context.requested_indication_icd10_codes == ["M54.16"]
+    assert parsed.context.icd10_codes == ["M54.16", "M79.18", "M47.816"]
+
+
+def test_rejects_missing_diagnosis_sequence(synthetic_bundle):
+    """No diagnosisSequence on the requested item → hard parse error."""
+    item = _find_claim_item(synthetic_bundle)
+    item.pop("diagnosisSequence", None)
+    with pytest.raises(BundleParseError, match="diagnosisSequence is required"):
+        parse_pas_bundle(synthetic_bundle)
+
+
+def test_rejects_empty_diagnosis_sequence(synthetic_bundle):
+    """Empty diagnosisSequence is treated the same as missing."""
+    _find_claim_item(synthetic_bundle)["diagnosisSequence"] = []
+    with pytest.raises(BundleParseError, match="diagnosisSequence is required"):
+        parse_pas_bundle(synthetic_bundle)
+
+
+def test_rejects_unresolved_diagnosis_sequence(synthetic_bundle):
+    """diagnosisSequence pointing at a non-existent diagnosis row errors
+    rather than silently producing an empty indication list."""
+    _find_claim_item(synthetic_bundle)["diagnosisSequence"] = [99]
+    with pytest.raises(BundleParseError, match=r"\[99\]"):
+        parse_pas_bundle(synthetic_bundle)
+
+
 def test_repeat_branch_with_prior_procedure():
     """A Bundle that includes a prior ESI Procedure should surface it under
     procedures_prior."""

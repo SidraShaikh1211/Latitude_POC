@@ -16,7 +16,14 @@
   "applies_to": {
     "cpt_codes": ["58150", "58152", "58180", "58200", "58210", "58260", "58262", "58263", "58267", "58270", "58275", "58280", "58290", "58291", "58292", "58293", "58294", "58541", "58542", "58543", "58544", "58550", "58552", "58553", "58554", "58570", "58571", "58572", "58573"],
     "hcpcs_codes": [],
-    "icd10_patterns": ["N80.*", "N94.6", "N94.8*", "N93.*", "N92.*", "N91.*"],
+    "icd10_patterns": [
+      "N80.03",
+      "N94.4", "N94.5", "N94.6",
+      "N94.8", "N94.81", "N94.810", "N94.818", "N94.819", "N94.89",
+      "N93.0", "N93.1", "N93.8", "N93.9",
+      "N92.0", "N92.1", "N92.2", "N92.3", "N92.4", "N92.5", "N92.6",
+      "N91.0", "N91.1", "N91.2", "N91.3", "N91.4", "N91.5"
+    ],
     "lines_of_business": ["medicaid"],
     "states": ["OR"],
     "age_min": 18,
@@ -361,6 +368,6 @@
     "authored_at": "2026-05-23",
     "review_status": "prototype-validated",
     "test_cases": ["L3-ADN-C1", "L3-ADN-C2", "L3-ADN-C3"],
-    "notes": "Models Section B (adenomyosis) of Oregon Guideline Note 39. Section A (endometriosis) would be authored as a sibling policy or branch."
+    "notes": "Models Section B (adenomyosis) of Oregon Guideline Note 39. ICD-10 patterns are literal codes — N80.03 is the only adenomyosis code under N80; N91/N92/N93/N94 codes are the qualifying menstrual / pain / AUB indications named in the Section B(1) symptom criterion. The sibling policy oregon-hcr-39-endometriosis (Section A) covers all other N80.x endometriosis codes."
   }
 }

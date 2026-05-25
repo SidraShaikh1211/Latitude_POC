@@ -360,6 +360,32 @@ def test_S17_fact_coverage_breaks_tie():
     assert res.tiebreaker_used == "fact_coverage"
 
 
+def test_S19_primary_weight_beats_secondary_pollution():
+    """S19: indication codes = [principal, contributing-1, contributing-2].
+    Policy A enumerates the principal literally; Policy B enumerates the
+    contributing-1 literally. With primary weighting, A must win — a single
+    accidental literal match on a secondary cannot outscore a clean match
+    on the principal."""
+    reg = PolicyRegistry()
+    _register(reg, _synthetic_policy(
+        policy_id="synth-principal",
+        cpts=["62323"],
+        icd10=["M54.16"],   # matches the principal only
+    ))
+    _register(reg, _synthetic_policy(
+        policy_id="synth-secondary",
+        cpts=["62323"],
+        icd10=["M79.18"],   # matches a downstream contributing code only
+    ))
+    res = select_policy(
+        _ctx(icd10=["M54.16", "M79.18"]),
+        registry=reg,
+    )
+    assert res.status == "ok"
+    assert res.selected_policy_id == "synth-principal"
+    assert res.tiebreaker_used == "icd10_match_quality"
+
+
 def test_S18_no_facts_falls_to_ambiguity():
     """S18: two policies tied through Tier 3 AND no case_facts provided →
     Tier 4 must NOT silently pick. The tie should fall through to
