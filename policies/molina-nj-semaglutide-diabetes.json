@@ -1,0 +1,312 @@
+{
+  "policy_id": "molina-nj-semaglutide-diabetes",
+  "name": "Semaglutide (Ozempic) for Type 2 Diabetes Mellitus — Molina NJ NJ-RX-SEMA-DM-2024",
+  "payer_id": "molina",
+  "version": "1.2",
+  "effective_from": "2024-01-01",
+  "effective_until": null,
+
+  "source": {
+    "pdf_path": "policies/sources/molina-nj-semaglutide-diabetes.pdf",
+    "total_pages": 2,
+    "publication_url": null,
+    "authority": "Molina Healthcare of New Jersey"
+  },
+
+  "applies_to": {
+    "cpt_codes": ["J3490", "semaglutide", "Ozempic", "Rybelsus"],
+    "hcpcs_codes": ["J3490"],
+    "icd10_patterns": ["E11.9", "E11.65", "E11.40"],
+    "lines_of_business": ["medicaid"],
+    "states": ["NJ"],
+    "age_min": 18,
+    "age_max": null,
+    "settings_of_care": ["outpatient", "office", "home"],
+    "request_categories": ["pharmacy"],
+    "branches": {
+      "initial": "Initial prior authorization for semaglutide (Ozempic / Rybelsus) for type 2 diabetes mellitus"
+    }
+  },
+
+  "criteria": {
+    "id": "root",
+    "type": "internal",
+    "operator": "ALL",
+    "description": "Medical necessity for semaglutide (Ozempic/Rybelsus) in type 2 diabetes mellitus: confirmed T2DM diagnosis AND age AND glycemic evidence (A1c ≥ 7.0% within 90 days) AND step therapy (metformin trial or contraindication AND inadequate response) AND T2DM-management indication.",
+    "policy_citation": {
+      "page": 1,
+      "section": "2. Coverage Policy",
+      "quote": "Authorization is approved when ALL of the following criteria are met"
+    },
+    "children": [
+      {
+        "id": "diagnosis",
+        "type": "leaf",
+        "description": "Confirmed diagnosis of type 2 diabetes mellitus documented in the medical record.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.1 Diagnosis",
+          "quote": "Confirmed diagnosis of type 2 diabetes mellitus documented in the medical record"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Condition"],
+          "extraction_hints": "Look for a Condition with ICD-10 in the E11.* family (E11.9 uncomplicated, E11.65 with hyperglycemia, E11.40 with neuropathy, or any other E11 subcode confirming T2DM).",
+          "value_constraints": {
+            "icd10_pattern": "E11.*"
+          },
+          "evaluator_kind": "diagnosis_code"
+        },
+        "verdict_rubric": {
+          "met": "Patient has a documented Condition with an ICD-10 code in the E11.* T2DM family.",
+          "not_met": "Patient's diagnoses include only non-T2DM glycemic disorders (e.g., type 1, pre-diabetes R73.03 only).",
+          "unclear": "Narrative mentions 'diabetes' without specifying type, or only A1c values without a coded diagnosis.",
+          "not_documented": "No diagnostic information available in records."
+        }
+      },
+      {
+        "id": "age_18_plus",
+        "type": "leaf",
+        "description": "Patient is 18 years of age or older at the time of the prior-authorization request.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.2 Age",
+          "quote": "Patient is 18 years of age or older"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Patient"],
+          "extraction_hints": "Compute age from Patient.birthDate at the request date.",
+          "value_constraints": { "age_min": 18 },
+          "evaluator_kind": "numeric_threshold"
+        },
+        "verdict_rubric": {
+          "met": "Patient's age at the request date is ≥ 18 years.",
+          "not_met": "Patient's age at the request date is < 18 years.",
+          "unclear": "Patient.birthDate present but request date ambiguous.",
+          "not_documented": "Patient.birthDate not present in records."
+        }
+      },
+      {
+        "id": "glycemic_evidence",
+        "type": "leaf",
+        "description": "Hemoglobin A1c value of 7.0% or greater documented within the prior 90 days.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.3 Glycemic Evidence",
+          "quote": "Hemoglobin A1c value of 7.0 percent or greater documented within the prior 90 days"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Observation", "DiagnosticReport"],
+          "extraction_hints": "Find an Observation or DiagnosticReport with LOINC 4548-4 (HbA1c) ≥ 7.0% measured within the 90 days immediately preceding the request date. Highest qualifying value within the window counts.",
+          "value_constraints": {
+            "a1c_min_percent": 7.0,
+            "max_age_days": 90
+          },
+          "evaluator_kind": "numeric_threshold_with_temporal_constraint"
+        },
+        "verdict_rubric": {
+          "met": "At least one HbA1c result ≥ 7.0% dated within 90 days of the request.",
+          "not_met": "All HbA1c values within 90 days are < 7.0%.",
+          "unclear": "HbA1c result present but date missing or outside the 90-day window; or A1c referenced only narratively without a numeric value.",
+          "not_documented": "No HbA1c results in records."
+        }
+      },
+      {
+        "id": "step_therapy",
+        "type": "internal",
+        "operator": "ALL",
+        "description": "Step therapy: documented metformin trial (≥3 months) or contraindication, AND inadequate glycemic response to metformin monotherapy at the maximum tolerated dose.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.4 Step Therapy",
+          "quote": "STEP THERAPY (ALL OF THE FOLLOWING)"
+        },
+        "children": [
+          {
+            "id": "step_therapy.metformin_trial_or_contraindication",
+            "type": "internal",
+            "operator": "ONE_OF",
+            "description": "Documented metformin trial of at least 3 months, OR documented contraindication to metformin.",
+            "policy_citation": {
+              "page": 1,
+              "section": "2.4 (a)",
+              "quote": "Documented trial of metformin for a minimum of 3 months, unless contraindicated"
+            },
+            "children": [
+              {
+                "id": "step_therapy.metformin_trial_or_contraindication.trial_3_months",
+                "type": "leaf",
+                "description": "Documented trial of metformin for a minimum of 3 months.",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "2.4 (a)",
+                  "quote": "Documented trial of metformin for a minimum of 3 months, unless contraindicated"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["MedicationRequest", "MedicationStatement"],
+                  "extraction_hints": "Find a metformin prescription or medication statement with start/end dates spanning ≥3 months, OR a clinician note explicitly attesting to ≥3 months of metformin use.",
+                  "value_constraints": {
+                    "drug_class": "biguanide",
+                    "drug_name": "metformin",
+                    "duration_min_months": 3
+                  },
+                  "evaluator_kind": "llm_with_temporal_constraint"
+                },
+                "verdict_rubric": {
+                  "met": "Metformin documented for ≥3 months via dated medication records or explicit duration narrative.",
+                  "not_met": "Metformin documented but duration < 3 months.",
+                  "unclear": "Metformin listed without dates or duration; or stated 'on metformin' without timeframe.",
+                  "not_documented": "No metformin prescription or use recorded."
+                }
+              },
+              {
+                "id": "step_therapy.metformin_trial_or_contraindication.contraindication",
+                "type": "leaf",
+                "description": "Documented clinical contraindication to metformin (e.g., eGFR < 30, severe hepatic impairment, history of lactic acidosis, hypersensitivity).",
+                "policy_citation": {
+                  "page": 1,
+                  "section": "2.4 (a)",
+                  "quote": "unless contraindicated"
+                },
+                "evaluation": {
+                  "fact_types_needed": ["AllergyIntolerance", "Condition", "Observation", "ClinicalImpression"],
+                  "extraction_hints": "Look for explicit clinician statement of metformin contraindication. Strong signals: eGFR < 30 mL/min/1.73m² Observation, severe hepatic dysfunction, prior lactic acidosis, AllergyIntolerance to metformin.",
+                  "value_constraints": {},
+                  "evaluator_kind": "llm_class_membership"
+                },
+                "verdict_rubric": {
+                  "met": "Clinician explicitly documents a contraindication to metformin for this patient.",
+                  "not_met": "No contraindication; metformin is expected per usual care.",
+                  "unclear": "Patient declined metformin for non-clinical reasons (cost, GI discomfort tolerated by most) without a clinical contraindication.",
+                  "not_documented": "Metformin tolerability or contraindication status not addressed."
+                }
+              }
+            ]
+          },
+          {
+            "id": "step_therapy.inadequate_response",
+            "type": "leaf",
+            "description": "Inadequate glycemic response to metformin monotherapy at the maximum tolerated dose.",
+            "policy_citation": {
+              "page": 1,
+              "section": "2.4 (b)",
+              "quote": "Inadequate glycemic response to metformin monotherapy at maximum tolerated dose"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation", "MedicationRequest", "ClinicalImpression"],
+              "extraction_hints": "Look for HbA1c remaining ≥ 7.0% (or specified target unmet) while on metformin monotherapy at max tolerated dose. Document max tolerated dose via current MedicationRequest dosage instructions. Inapplicable if the metformin-contraindication branch was satisfied — in that case, glycemic non-response is established by the qualifying A1c alone.",
+              "value_constraints": {
+                "monotherapy": "metformin",
+                "a1c_threshold_percent": 7.0
+              },
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "A1c ≥ 7.0% (or unmet target) documented while on metformin monotherapy at max tolerated dose; OR metformin contraindicated AND qualifying A1c documented.",
+              "not_met": "A1c is at target on metformin monotherapy; semaglutide not yet indicated.",
+              "unclear": "Metformin dose escalation not documented; or A1c on metformin not recorded.",
+              "not_documented": "Response to metformin not addressed in records."
+            }
+          }
+        ]
+      },
+      {
+        "id": "prescribing_indication",
+        "type": "leaf",
+        "description": "Medication is being prescribed for the management of type 2 diabetes mellitus, not for weight management as a primary indication.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.5 Prescribing Indication",
+          "quote": "The medication is being prescribed for the management of type 2 diabetes mellitus, not for weight management as a primary indication"
+        },
+        "evaluation": {
+          "fact_types_needed": ["MedicationRequest", "ClinicalImpression", "Condition"],
+          "extraction_hints": "Check MedicationRequest.reasonCode/reasonReference and clinician note. Primary indication should be T2DM glycemic management (A1c reduction). Coexisting obesity is acceptable so long as weight management is not the stated primary purpose.",
+          "value_constraints": {
+            "primary_indication": "t2dm_management",
+            "excluded_primary_indication": "weight_management"
+          },
+          "evaluator_kind": "llm_class_membership"
+        },
+        "verdict_rubric": {
+          "met": "Prescribing note or MedicationRequest.reasonCode clearly indicates T2DM management as the primary indication.",
+          "not_met": "Prescribing note explicitly cites weight loss / obesity management as the primary reason for semaglutide.",
+          "unclear": "Both indications mentioned without primacy specified.",
+          "not_documented": "No prescribing rationale on file."
+        }
+      }
+    ]
+  },
+
+  "exclusions": [
+    {
+      "id": "X1",
+      "description": "Primary indication is weight management or obesity rather than glycemic control — route to the separate anti-obesity medication policy.",
+      "policy_citation": {
+        "page": 1,
+        "section": "3.1 Primary Indication is Weight Loss",
+        "quote": "The medication is being prescribed primarily for weight management or obesity rather than for glycemic control"
+      },
+      "evaluation": {
+        "fact_types_needed": ["MedicationRequest", "Condition", "ClinicalImpression"],
+        "extraction_hints": "Look for obesity (E66.*) on the problem list combined with prescribing rationale that explicitly cites weight loss as the primary purpose. References to Wegovy-style dosing schedules or weight-loss targets are strong signals.",
+        "evaluator_kind": "llm_class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Documented primary indication is weight management / obesity (e.g., 'starting Ozempic for weight loss').",
+        "not_met": "Primary indication is T2DM glycemic control; any weight-loss effect is secondary or unmentioned.",
+        "unclear": "Both indications appear without explicit primacy.",
+        "not_documented": "No prescribing rationale on file."
+      }
+    },
+    {
+      "id": "X2",
+      "description": "Patient has a diagnosis of type 1 diabetes mellitus (E10.*) — semaglutide is not indicated for T1DM.",
+      "policy_citation": {
+        "page": 1,
+        "section": "3.2 Type 1 Diabetes",
+        "quote": "Patient has a diagnosis of type 1 diabetes mellitus (E10.*)"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition"],
+        "extraction_hints": "Look for any Condition with ICD-10 in the E10.* family. T1DM is a categorical contraindication for this policy even if a T2DM code is also present (verify the primary diagnosis).",
+        "value_constraints": {
+          "icd10_pattern": "E10.*"
+        },
+        "evaluator_kind": "diagnosis_code"
+      },
+      "verdict_rubric": {
+        "met": "Active Condition with ICD-10 in E10.* family documented.",
+        "not_met": "No T1DM diagnosis on file.",
+        "unclear": "Narrative mentions 'insulin-dependent diabetes' without confirming type 1 vs insulin-requiring type 2.",
+        "not_documented": "Diabetes type not specified in records."
+      }
+    },
+    {
+      "id": "X3",
+      "description": "Personal or family history of medullary thyroid carcinoma or Multiple Endocrine Neoplasia syndrome type 2 (boxed-warning contraindication).",
+      "policy_citation": {
+        "page": 1,
+        "section": "3.3 Personal or Family History",
+        "quote": "Personal or family history of medullary thyroid carcinoma or Multiple Endocrine Neoplasia syndrome type 2 (contraindication)"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "FamilyMemberHistory", "ClinicalImpression"],
+        "extraction_hints": "Search the problem list and family history for medullary thyroid carcinoma (C73 with MTC modifier, or narrative 'medullary thyroid cancer') or Multiple Endocrine Neoplasia type 2 (MEN2, MEN2A, MEN2B, ICD-10 E31.22 / E31.23). Both personal and family history qualify.",
+        "evaluator_kind": "llm_class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Documented personal or family history of MTC or MEN2.",
+        "not_met": "Family / personal history reviewed and is negative for MTC and MEN2.",
+        "unclear": "Thyroid nodule or unspecified thyroid cancer mentioned without specifying medullary subtype.",
+        "not_documented": "Family and personal endocrine history not addressed in records."
+      }
+    }
+  ],
+
+  "metadata": {
+    "authored_by": "PA Prototype PA Prototype",
+    "authored_at": "2026-05-25",
+    "review_status": "prototype-validated",
+    "notes": "Models Molina NJ Clinical Policy NJ-RX-SEMA-DM-2024 (Semaglutide / Ozempic / Rybelsus for Type 2 Diabetes). Sibling to molina-nj-semaglutide-obesity — same payer/state/HCPCS, separated by ICD-10 indication. Selector relies on Claim.item[0].diagnosisSequence to route between the two."
+  }
+}

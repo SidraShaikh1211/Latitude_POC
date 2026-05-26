@@ -1,0 +1,252 @@
+{
+  "policy_id": "molina-nj-semaglutide-obesity",
+  "name": "Semaglutide (Wegovy) for Chronic Weight Management — Molina NJ NJ-RX-SEMA-OB-2024",
+  "payer_id": "molina",
+  "version": "1.1",
+  "effective_from": "2024-01-01",
+  "effective_until": null,
+
+  "source": {
+    "pdf_path": "policies/sources/molina-nj-semaglutide-obesity.pdf",
+    "total_pages": 1,
+    "publication_url": null,
+    "authority": "Molina Healthcare of New Jersey"
+  },
+
+  "applies_to": {
+    "cpt_codes": ["J3490", "semaglutide", "Wegovy"],
+    "hcpcs_codes": ["J3490"],
+    "icd10_patterns": ["E66.01", "E66.09", "E66.9"],
+    "lines_of_business": ["medicaid"],
+    "states": ["NJ"],
+    "age_min": 18,
+    "age_max": null,
+    "settings_of_care": ["outpatient", "office", "home"],
+    "request_categories": ["pharmacy"],
+    "branches": {
+      "initial": "Initial prior authorization for semaglutide (Wegovy) for chronic weight management"
+    }
+  },
+
+  "criteria": {
+    "id": "root",
+    "type": "internal",
+    "operator": "ALL",
+    "description": "Medical necessity for semaglutide (Wegovy) in chronic weight management: BMI threshold AND age AND failed lifestyle intervention AND chronic-weight-management indication.",
+    "policy_citation": {
+      "page": 1,
+      "section": "2. Coverage Policy",
+      "quote": "Authorization is approved when ALL of the following criteria are met"
+    },
+    "children": [
+      {
+        "id": "bmi_threshold",
+        "type": "internal",
+        "operator": "ONE_OF",
+        "description": "BMI ≥ 30 (obesity) OR BMI ≥ 27 with at least one weight-related comorbidity (HTN, dyslipidemia, T2DM, OSA).",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.1 BMI Threshold",
+          "quote": "BMI THRESHOLD (ONE OF THE FOLLOWING)"
+        },
+        "children": [
+          {
+            "id": "bmi_threshold.bmi_30_plus",
+            "type": "leaf",
+            "description": "Body mass index of 30 kg/m² or greater (obesity).",
+            "policy_citation": {
+              "page": 1,
+              "section": "2.1 (a)",
+              "quote": "Body mass index of 30 kg/m2 or greater (obesity)"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation"],
+              "extraction_hints": "Find Observation with LOINC 39156-5 (BMI) ≥ 30, or compute from height (LOINC 8302-2) and weight (LOINC 29463-7). ICD-10 Z68.3*/Z68.4* also indicate this range.",
+              "value_constraints": { "bmi_min": 30 },
+              "evaluator_kind": "numeric_threshold"
+            },
+            "verdict_rubric": {
+              "met": "Documented BMI ≥ 30 kg/m².",
+              "not_met": "Documented BMI < 30 kg/m² (the 27+comorbidity branch may still satisfy this requirement).",
+              "unclear": "Weight and height present without explicit BMI computation; or only narrative reference to 'obesity' without value.",
+              "not_documented": "No BMI, weight, or height measurement available."
+            }
+          },
+          {
+            "id": "bmi_threshold.bmi_27_plus_with_comorbidity",
+            "type": "leaf",
+            "description": "BMI ≥ 27 with at least one weight-related comorbidity (hypertension, dyslipidemia, type 2 diabetes mellitus, obstructive sleep apnea).",
+            "policy_citation": {
+              "page": 1,
+              "section": "2.1 (b)",
+              "quote": "Body mass index of 27 kg/m2 or greater with at least one weight-related comorbidity (hypertension, dyslipidemia, type 2 diabetes mellitus, obstructive sleep apnea)"
+            },
+            "evaluation": {
+              "fact_types_needed": ["Observation", "Condition"],
+              "extraction_hints": "BMI ≥ 27 from Observation AND at least one Condition matching: hypertension (I10-I15), dyslipidemia (E78.*), type 2 diabetes mellitus (E11.*), or obstructive sleep apnea (G47.33).",
+              "value_constraints": {
+                "bmi_min": 27,
+                "qualifying_comorbidities": [
+                  "hypertension",
+                  "dyslipidemia",
+                  "type 2 diabetes mellitus",
+                  "obstructive sleep apnea"
+                ]
+              },
+              "evaluator_kind": "llm_class_membership"
+            },
+            "verdict_rubric": {
+              "met": "BMI ≥ 27 documented AND at least one of the four qualifying comorbidities is on the problem list or visit diagnosis.",
+              "not_met": "BMI ≥ 27 but none of the four comorbidities present; or BMI < 27.",
+              "unclear": "Comorbidity narrative is suggestive but uncoded (e.g., 'pre-diabetes' without E11 confirmation, 'borderline hypertension' without I10).",
+              "not_documented": "Either BMI or comorbidity status is missing from records."
+            }
+          }
+        ]
+      },
+      {
+        "id": "age_18_plus",
+        "type": "leaf",
+        "description": "Patient is 18 years of age or older at the time of the prior-authorization request.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.2 Age",
+          "quote": "Patient is 18 years of age or older"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Patient"],
+          "extraction_hints": "Compute age from Patient.birthDate at the request date.",
+          "value_constraints": { "age_min": 18 },
+          "evaluator_kind": "numeric_threshold"
+        },
+        "verdict_rubric": {
+          "met": "Patient's age at the request date is ≥ 18 years.",
+          "not_met": "Patient's age at the request date is < 18 years (Wegovy adult branch does not apply).",
+          "unclear": "Patient.birthDate present but request date ambiguous.",
+          "not_documented": "Patient.birthDate not present in records."
+        }
+      },
+      {
+        "id": "failed_lifestyle",
+        "type": "leaf",
+        "description": "Documented participation in a structured weight-management program (dietary counseling + physical activity) for at least 6 months with inadequate response (less than 5% reduction in baseline body weight).",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.3 Failed Lifestyle Intervention",
+          "quote": "Documented participation in a structured weight management program including dietary counseling and physical activity for a minimum of 6 months with inadequate response (defined as less than 5 percent reduction in baseline body weight)"
+        },
+        "evaluation": {
+          "fact_types_needed": ["Observation", "Procedure", "ClinicalImpression"],
+          "extraction_hints": "Look for documented dietary counseling AND physical-activity program lasting ≥6 months. Compare baseline body weight to follow-up weight at or near the request date; reduction must be < 5%. Acceptable evidence: dietitian or PCP notes, structured-program enrollment records, serial weight Observations.",
+          "value_constraints": {
+            "duration_min_months": 6,
+            "weight_reduction_max_percent": 5
+          },
+          "evaluator_kind": "llm_with_temporal_constraint"
+        },
+        "verdict_rubric": {
+          "met": "Structured program with diet AND activity components documented for ≥6 months; baseline and follow-up weights show < 5% reduction.",
+          "not_met": "Patient achieved ≥ 5% body-weight reduction on lifestyle alone (medication not indicated), OR no structured program was attempted.",
+          "unclear": "Lifestyle counseling mentioned without duration or measurable weight outcomes; or only one of diet/activity components documented.",
+          "not_documented": "No lifestyle-intervention history in records."
+        }
+      },
+      {
+        "id": "prescribing_indication",
+        "type": "leaf",
+        "description": "Medication is being prescribed primarily for chronic weight management, not for glycemic control of type 2 diabetes as a primary indication.",
+        "policy_citation": {
+          "page": 1,
+          "section": "2.4 Prescribing Indication",
+          "quote": "The medication is being prescribed primarily for chronic weight management, not for glycemic control as a primary indication"
+        },
+        "evaluation": {
+          "fact_types_needed": ["MedicationRequest", "ClinicalImpression", "Condition"],
+          "extraction_hints": "Check MedicationRequest.reasonCode/reasonReference and clinician note. Primary indication should be obesity / chronic weight management. Coexisting T2DM is acceptable so long as glycemic control is not the stated primary purpose.",
+          "value_constraints": {
+            "primary_indication": "chronic_weight_management",
+            "excluded_primary_indication": "glycemic_control"
+          },
+          "evaluator_kind": "llm_class_membership"
+        },
+        "verdict_rubric": {
+          "met": "Prescribing note or MedicationRequest.reasonCode clearly indicates weight management as the primary indication.",
+          "not_met": "Prescribing note explicitly cites T2DM glycemic control as the primary reason for semaglutide.",
+          "unclear": "Both indications mentioned without primacy specified.",
+          "not_documented": "No prescribing rationale on file."
+        }
+      }
+    ]
+  },
+
+  "exclusions": [
+    {
+      "id": "X1",
+      "description": "Primary indication is glycemic management of type 2 diabetes rather than weight management — route to the diabetes medication policy.",
+      "policy_citation": {
+        "page": 1,
+        "section": "3.1 Primary Indication is Glycemic Control",
+        "quote": "The medication is being prescribed primarily for glycemic management of type 2 diabetes rather than for weight management"
+      },
+      "evaluation": {
+        "fact_types_needed": ["MedicationRequest", "Condition", "ClinicalImpression"],
+        "extraction_hints": "Look for T2DM (E11.*) on problem list combined with prescribing rationale that explicitly cites glycemic control / A1c reduction as the primary purpose. Mention of Ozempic or semaglutide doses titrated to A1c targets is a strong signal.",
+        "evaluator_kind": "llm_class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Documented primary indication is glycemic control of T2DM (e.g., 'started Ozempic to reduce A1c').",
+        "not_met": "Primary indication is weight management; any glycemic effect is secondary or unmentioned.",
+        "unclear": "Both indications appear without explicit primacy.",
+        "not_documented": "No prescribing rationale on file."
+      }
+    },
+    {
+      "id": "X2",
+      "description": "Patient has had bariatric surgery within the prior 6 months.",
+      "policy_citation": {
+        "page": 1,
+        "section": "3.2 Bariatric Surgery History",
+        "quote": "Patient has had bariatric surgery within the prior 6 months"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Procedure"],
+        "extraction_hints": "Find a prior bariatric procedure (sleeve gastrectomy, Roux-en-Y gastric bypass, adjustable gastric banding, biliopancreatic diversion, etc.) with a performed date within 6 months of the request date.",
+        "value_constraints": { "lookback_max_months": 6 },
+        "evaluator_kind": "llm_with_temporal_constraint"
+      },
+      "verdict_rubric": {
+        "met": "Bariatric procedure performed within the 6 months immediately preceding the request.",
+        "not_met": "No bariatric procedure on file, OR last bariatric procedure was > 6 months ago.",
+        "unclear": "Bariatric procedure documented but the date is missing or ambiguous.",
+        "not_documented": "Surgical history not addressed in records."
+      }
+    },
+    {
+      "id": "X3",
+      "description": "Patient is currently pregnant or planning pregnancy within the next 60 days.",
+      "policy_citation": {
+        "page": 1,
+        "section": "3.3 Pregnancy",
+        "quote": "Patient is currently pregnant or planning pregnancy within the next 60 days"
+      },
+      "evaluation": {
+        "fact_types_needed": ["Condition", "Observation", "ClinicalImpression"],
+        "extraction_hints": "Look for active pregnancy (Z33.1, O09.*, positive pregnancy test Observation) OR a documented intent to conceive within 60 days. Patients on reliable contraception with no stated conception plans do not trigger this exclusion.",
+        "evaluator_kind": "llm_class_membership"
+      },
+      "verdict_rubric": {
+        "met": "Active pregnancy documented, OR explicit documented intent to conceive within 60 days.",
+        "not_met": "Patient is not pregnant and there is no documented plan to conceive within 60 days.",
+        "unclear": "Pregnancy status not directly addressed but reproductive context is mentioned (e.g., fertility treatment, contraception change).",
+        "not_documented": "Pregnancy / family-planning status not addressed in records."
+      }
+    }
+  ],
+
+  "metadata": {
+    "authored_by": "PA Prototype PA Prototype",
+    "authored_at": "2026-05-25",
+    "review_status": "prototype-validated",
+    "notes": "Models Molina NJ Clinical Policy NJ-RX-SEMA-OB-2024 (Semaglutide / Wegovy for Chronic Weight Management). Distinguishes from MassHealth's tirzepatide / Zepbound policy by payer, state, and drug."
+  }
+}
