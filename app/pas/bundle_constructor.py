@@ -226,9 +226,10 @@ def _service_request(sub: SubmissionData, ids: "_Ids") -> dict:
         "occurrenceDateTime": sub.service_date,
         "requester": {"reference": f"Practitioner/{ids.practitioner}"},
         "performer": [{"reference": f"Organization/{ids.org_provider}"}],
-        "bodySite": [{
-            "text": sub.body_site_display,
-        }],
+        # Omit bodySite when there is no anatomical site (e.g. pharmacy requests).
+        # FHIR R4B forbids empty CodeableConcept.text; emitting an empty element
+        # is also semantically wrong — it asserts "site unknown" rather than "n/a".
+        **({"bodySite": [{"text": sub.body_site_display}]} if sub.body_site_display else {}),
         "locationCode": [{
             "coding": [{
                 "system": "http://terminology.hl7.org/CodeSystem/v3-RoleCode",
@@ -344,9 +345,7 @@ def _claim(sub: SubmissionData, ids: "_Ids") -> dict:
             },
             "servicedDate": sub.service_date,
             "diagnosisSequence": diagnosis_seq,
-            "bodySite": {
-                "text": sub.body_site_display,
-            },
+            **({"bodySite": {"text": sub.body_site_display}} if sub.body_site_display else {}),
         }],
         "supportingInfo": [{
             "sequence": 1,
