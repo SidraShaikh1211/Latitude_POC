@@ -1,0 +1,60 @@
+# Build the image with Cloud Build and deploy to Cloud Run.
+#
+# Prerequisites (one-time, run via gcloud):
+#   - Artifact Registry repo `latitude-poc` in ${_REGION}
+#   - Cloud SQL Postgres instance with a `latitude` database + `app` user
+#   - Secret Manager secrets:
+#       ANTHROPIC_API_KEY  = sk-ant-...
+#       DATABASE_URL       = postgresql+asyncpg://app:PASSWORD@/latitude?host=/cloudsql/PROJECT:REGION:INSTANCE
+#
+# Substitutions (override with --substitutions=_KEY=value):
+#   _REGION         us-central1
+#   _REPO           latitude-poc
+#   _SERVICE        latitude-poc
+#   _SQL_INSTANCE   PROJECT:REGION:INSTANCE   (Cloud SQL connection name)
+
+substitutions:
+  _REGION: us-central1
+  _REPO: latitude-poc
+  _SERVICE: latitude-poc
+  _SQL_INSTANCE: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID"
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID
+      - --tag=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --memory=1Gi
+      - --cpu=1
+      - --timeout=600
+      - --add-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,DATABASE_URL=DATABASE_URL:latest

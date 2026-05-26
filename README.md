@@ -1,6 +1,6 @@
 # PA Prototype — Prior Authorization Prototype
 
-A payer-side prior-authorization decision-support prototype built for the PA Prototype senior-engineer coding assessment. A doctor uploads a single clinical PDF; the system extracts all needed structured fields (CPT, ICD-10, patient demographics, insurance) from the document, assembles a Da Vinci PAS Claim Bundle, routes to the matching policy out of several loaded policies, adjudicates each criterion against the patient's record, and returns a determination (approve / pend / deny) with a clinician-readable narrative and actionable missing-information requests.
+A payer-side prior-authorization decision-support prototype. A doctor uploads a single clinical PDF; the system extracts all needed structured fields (CPT, ICD-10, patient demographics, insurance) from the document, assembles a Da Vinci PAS Claim Bundle, routes to the matching policy out of several loaded policies, adjudicates each criterion against the patient's record, and returns a determination (approve / pend / deny) with a clinician-readable narrative and actionable missing-information requests.
 
 **Two keystone cases, one pipeline:**
 - **David Smith** (pain management, NY) — submits a chronic low-back-pain fax bundle requesting lumbar interlaminar ESI. Routes to the Molina ESI policy → **pend** with PT-documentation gaps.
@@ -10,7 +10,7 @@ Both cases enter the system the **same way** — a doctor uploads the PDF, nothi
 
 ---
 
-## How this hits the four assessment requirements
+## How this hits the four prototype requirements
 
 | # | Brief requirement | How it's implemented |
 |---|---|---|
@@ -23,7 +23,7 @@ Both cases enter the system the **same way** — a doctor uploads the PDF, nothi
 
 ## The 15-step clinical review workflow
 
-The brief includes a 15-step clinical-review checklist (the *Clinical review steps* PDF from the assessment package; `clinical_pdfs/` is gitignored — see "Demo PDFs" below). Every step maps to a concrete component:
+A 15-step clinical-review checklist (the *Clinical review steps* PDF kept locally in `clinical_pdfs/`, which is gitignored — see "Demo PDFs" below) shaped the design. Every step maps to a concrete component:
 
 | Step | Component |
 |---|---|
@@ -155,7 +155,7 @@ These were considered and explicitly cut to fit the prototype scope. Each is one
 - **US Core profile validation** — base R4 sufficient
 - **OAuth / SMART on FHIR** — mock with API keys in `.env`
 - **OCR fallback** — both test PDFs text-extract cleanly
-- **Deployment (Fly.io / Cloud Run)** — local-only by design; deploy is one Dockerfile away
+- **CI/CD trigger** — Cloud Build pipeline is wired (see Deployment section); a GitHub trigger or scheduled job is one config away
 - **Langfuse / OpenTelemetry** — structlog JSON logs + `Usage` accounting are enough for this scope
 - **Pre-baked fixtures** — every case enters via the live PDF→extractor→bundle path; there are no hardcoded patient bundles
 
@@ -248,7 +248,7 @@ Latitude_POC/
 ## Running it
 
 > ⚠️ **Clinical PDFs are not in the repo.** The `clinical_pdfs/` folder is
-> gitignored (assessment materials aren't redistributable). Before running
+> gitignored (the clinical sample PDFs aren't redistributable). Before running
 > `make seed` or the doctor-UI demo, you need to obtain or supply your own
 > clinical PDFs and place them locally — see "Demo PDFs" below.
 
@@ -295,8 +295,7 @@ VITE_API_BASE=http://127.0.0.1:8000 npm run dev
 
 ### Demo PDFs
 
-The repo doesn't ship the patient or source-policy PDFs (they came with the
-Latitude assessment package and aren't republished). To run the full demo:
+The repo doesn't ship the sample patient PDFs (they aren't redistributable). To run the full demo:
 
 1. Place your `David_Smith_Clinical.pdf` and `Catherine Welsh MR.pdf` (or
    any other clinical PDFs you want to test) inside `clinical_pdfs/`.
@@ -365,6 +364,135 @@ curl -X POST http://localhost:8000/fhir/Claim/\$submit \
 ```
 
 Then ask Claude: *"Evaluate the latest PA case and show me the missing-info requests."* Claude will call `list_cases` → `get_case` and surface the determination.
+
+---
+
+## Deployment (Cloud Run)
+
+The repo ships with everything needed to deploy as a **single container** to Google Cloud Run, backed by **Cloud SQL Postgres**. Same image serves the FastAPI backend on `$PORT` and the built React bundle from `/`.
+
+### What's in the repo
+
+| File | What it does |
+|---|---|
+| `Dockerfile` | Multi-stage: `node:20-alpine` builds the React app with `VITE_API_BASE=""` (same-origin in prod) → `python:3.12-slim` installs requirements and serves uvicorn on `$PORT` (default 8080). |
+| `.dockerignore` | Skips `.venv`, `node_modules`, local `data/app.db*`, `tests/`, etc. Keeps `app/`, `policies/`, `skills/`, and the built `dist/`. |
+| `cloudbuild.yaml` | Three steps: `docker build` → push to Artifact Registry → `gcloud run deploy` with the Cloud SQL connector flag and Secret Manager bindings. Uses `$BUILD_ID` for image tags (works for direct `gcloud builds submit`, not just Git triggers). |
+| `Makefile` | `make docker-build`, `make docker-run`, `make deploy SQL_INSTANCE=…` targets. |
+
+### Architecture
+
+```
+                       ┌──────────────────────────┐
+                       │  Google Cloud Project    │
+                       │                          │
+   browser ──HTTPS──►  │  Cloud Run service       │
+                       │  (FastAPI + static React)│
+                       │       │       ▲          │
+                       │       │       │          │
+                       │       ▼       │          │
+                       │  Cloud SQL    │          │
+                       │  Postgres 15  │          │
+                       │  (Unix socket │          │
+                       │   /cloudsql/) │          │
+                       │               │          │
+                       │  Secret Manager:         │
+                       │   ANTHROPIC_API_KEY      │
+                       │   DATABASE_URL           │
+                       │                          │
+                       │  Artifact Registry       │
+                       │   (Docker images)        │
+                       │                          │
+                       │  Cloud Build             │
+                       │   (CI: build → deploy)   │
+                       └──────────────────────────┘
+```
+
+### One-time setup (per GCP project)
+
+```bash
+# Pick your own project ID, region, repo, and instance names.
+PROJECT_ID=<your-gcp-project>
+REGION=us-central1
+REPO=latitude-poc
+INSTANCE=latitude-poc-db
+
+gcloud config set project "$PROJECT_ID"
+
+gcloud services enable \
+  run.googleapis.com artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com sqladmin.googleapis.com \
+  secretmanager.googleapis.com
+
+gcloud artifacts repositories create "$REPO" \
+  --repository-format=docker --location="$REGION"
+
+gcloud sql instances create "$INSTANCE" \
+  --database-version=POSTGRES_15 --tier=db-f1-micro \
+  --region="$REGION" --storage-size=10GB
+gcloud sql databases create latitude --instance="$INSTANCE"
+gcloud sql users create app --instance="$INSTANCE" --password='<strong-password>'
+
+# Store secrets. DATABASE_URL takes the Cloud SQL Unix-socket form:
+#   postgresql+asyncpg://app:<urlencoded-password>@/latitude?host=/cloudsql/<connection-name>
+printf 'sk-ant-...' | gcloud secrets create ANTHROPIC_API_KEY --data-file=-
+printf 'postgresql+asyncpg://...' | gcloud secrets create DATABASE_URL --data-file=-
+
+# Grant the Cloud Run runtime SA access to secrets + Cloud SQL.
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+for SECRET in ANTHROPIC_API_KEY DATABASE_URL; do
+  gcloud secrets add-iam-policy-binding "$SECRET" \
+    --member="serviceAccount:$SA" --role=roles/secretmanager.secretAccessor
+done
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA" --role=roles/cloudsql.client
+
+# Cloud Build SAs need permission to deploy + act-as the runtime SA.
+for CB_SA in "${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" "$SA"; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$CB_SA" --role=roles/run.admin
+  gcloud iam service-accounts add-iam-policy-binding "$SA" \
+    --member="serviceAccount:$CB_SA" --role=roles/iam.serviceAccountUser
+done
+```
+
+### Deploy
+
+```bash
+make deploy SQL_INSTANCE=$PROJECT_ID:$REGION:$INSTANCE
+```
+
+That runs `gcloud builds submit --config=cloudbuild.yaml ...`. End-to-end: Cloud Build uploads the source, builds the multi-stage Dockerfile, pushes to Artifact Registry, and deploys a new Cloud Run revision wired to the Cloud SQL instance and the two secrets. Takes ~4–5 minutes on a cold cache, ~1–2 on subsequent builds.
+
+### Required env vars on the Cloud Run service
+
+| Var | Source | Notes |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Secret Manager | LLM auth |
+| `DATABASE_URL` | Secret Manager | `postgresql+asyncpg://…?host=/cloudsql/…` over the Unix socket |
+| `PAYER_PAS_BASE_URL` | env var | `http://127.0.0.1:8080` — must match `$PORT` (see caveat below) |
+| `DOCTOR_CALLBACK_BASE_URL` | env var | `http://127.0.0.1:8080` — symmetric to above |
+
+`pydantic-settings` reads `DATABASE_URL` automatically and overrides the local SQLite default; SQLite-specific paths in `app/db/engine.py` are already guarded.
+
+### Useful runtime commands
+
+```bash
+gcloud run services describe latitude-poc --region=$REGION --format='value(status.url)'
+gcloud run services logs read latitude-poc --region=$REGION --limit=50
+gcloud run services update latitude-poc --region=$REGION --min-instances=1   # warm
+gcloud run services delete latitude-poc --region=$REGION                     # stop
+gcloud sql instances delete $INSTANCE                                        # main cost driver
+```
+
+### POC-level caveats
+
+- **Uploaded PDFs are ephemeral.** `data/pdfs/` lives on the container filesystem. Anything written there is wiped on every Cloud Run cold start or revision rollout. Fine for a demo; swap to GCS for durable storage.
+- **A2A self-loopback URLs must match the listening port.** `settings.payer_pas_base_url` and `settings.doctor_callback_base_url` default to `http://127.0.0.1:8000` (local-dev convention), but Cloud Run binds uvicorn to `$PORT` (default `8080`). Forgetting the env-var override produces `httpx.ConnectError: All connection attempts failed` the moment the pipeline reaches the doctor → payer handoff. The override is in the env-var table above.
+- **Cold-start latency ~5–8 s** the first hit after idle (image pull + Python boot + policy registry citation verification). `--min-instances=1` removes it at ~$5/mo extra.
+- **No auth.** Cloud Run is deployed `--allow-unauthenticated`. For anything beyond an internal demo, gate with IAP or require an `roles/run.invoker` binding.
+- **No migrations.** Schema is created via SQLAlchemy `create_all` on startup; the SQLite ALTER TABLE backfill in `app/db/engine.py` is guarded and only runs on the SQLite path. Add Alembic before a real schema change in prod.
 
 ---
 
@@ -449,7 +577,6 @@ What this prototype shows about how the design would evolve toward production us
 
 ## License + credits
 
-Built for the PA Prototype senior-engineer coding assessment, May 2026.
 - The Molina ESI Clinical Policy MCP-032 (August 2024) is from Molina's public clinical policy library.
 - The hysterectomy policy is adapted from Oregon Health Authority Prioritized List Guideline Note 39 (re-badged as a Molina policy for demo simplicity — single insurer with multiple policies).
-- Both patient PDFs (David Smith, Catherine Welsh) were provided as part of the assessment materials.
+- The sample patient PDFs (David Smith, Catherine Welsh) are kept locally and not redistributed.

@@ -1,7 +1,10 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 from app.api import a2a as a2a_router
@@ -94,3 +97,23 @@ async def _mcp_asgi(scope, receive, send) -> None:
 
 
 app.mount("/mcp", _mcp_asgi)
+
+
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend-react" / "dist"
+_API_PREFIXES = ("/v1", "/fhir", "/mcp", "/health", "/.well-known")
+
+if _FRONTEND_DIST.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_FRONTEND_DIST / "assets"),
+        name="assets",
+    )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> FileResponse:
+        if any(("/" + full_path).startswith(p) for p in _API_PREFIXES):
+            raise HTTPException(status_code=404)
+        candidate = _FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")

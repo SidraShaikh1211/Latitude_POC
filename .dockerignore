@@ -1,0 +1,33 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.DS_Store
+
+# Local DB + generated artifacts — Postgres in prod, no need to ship these
+data/app.db*
+data/pdfs/
+
+# Frontend: node_modules and the local dist are rebuilt inside the image
+frontend-react/node_modules
+frontend-react/dist
+
+# Editor + env
+.vscode
+.idea
+.env
+.env.*
+
+# Tests + reference material not needed at runtime
+# (skills/ IS needed — SKILL.md files are loaded at runtime)
+tests/
+fastapi/
+00-build-spec.md
+README.md
