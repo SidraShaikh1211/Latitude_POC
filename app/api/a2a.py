@@ -13,7 +13,7 @@ router = APIRouter(tags=["a2a"])
 def agent_card() -> dict:
     return {
         "schemaVersion": "0.1",
-        "name": "PA Prototype PA Prototype",
+        "name": "PA Prototype",
         "description": (
             "Payer-side prior-authorization decision support. Accepts Da Vinci "
             "PAS Claim Bundles, evaluates against policy criteria with citation-"

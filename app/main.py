@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="PA Prototype PA Prototype",
+    title="PA Prototype",
     description=(
         "Payer-side Prior Authorization prototype: FHIR extraction, "
         "policy adjudication, Da Vinci PAS responses, and an MCP server "

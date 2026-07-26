@@ -1,4 +1,4 @@
-# PA Prototype — Prior Authorization Prototype
+# Prior Authorization Decision-Support Prototype
 
 A payer-side prior-authorization decision-support prototype. A doctor uploads a single clinical PDF; the system extracts all needed structured fields (CPT, ICD-10, patient demographics, insurance) from the document, assembles a Da Vinci PAS Claim Bundle, routes to the matching policy out of several loaded policies, adjudicates each criterion against the patient's record, and returns a determination (approve / pend / deny) with a clinician-readable narrative and actionable missing-information requests.
 

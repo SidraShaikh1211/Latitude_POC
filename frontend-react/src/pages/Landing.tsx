@@ -29,7 +29,7 @@ export function Landing() {
     <div className="space-y-10">
       <section>
         <h1 className="text-3xl font-bold tracking-tight">
-          PA Prototype — Prior Authorization Prototype
+          Prior Authorization Prototype
         </h1>
         <p className="mt-3 text-muted-foreground max-w-3xl">
           Payer-side decision support with a simulated provider front door. Da

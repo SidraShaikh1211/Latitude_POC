@@ -330,7 +330,7 @@
   ],
 
   "metadata": {
-    "authored_by": "PA Prototype PA Prototype",
+    "authored_by": "PA Prototype",
     "authored_at": "2026-05-24",
     "review_status": "prototype-validated",
     "notes": "Models Section A (endometriosis) of Oregon Guideline Note 39. Sibling of oregon-hcr-39 (Section B, adenomyosis). ICD-10 patterns intentionally exclude N80.03 so the selector routes adenomyosis cases to the sibling policy without ambiguity."

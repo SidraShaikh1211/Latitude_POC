@@ -1,4 +1,4 @@
-# PA Prototype — Prior Authorization System
+# Prior Authorization System
 ## Build Specification
 
 > **Purpose of this document.** A single self-contained specification for building a prototype prior authorization (PA) system that ingests clinical documents, extracts FHIR-structured patient data with citations, selects the applicable medical policy, adjudicates each criterion via LLM, and returns a Da Vinci PAS–shaped determination. Designed for an engineer (or coding agent) to read once and build from. Combines and supersedes prior design documents.
@@ -217,7 +217,7 @@ For the prototype, provider-side and payer-side run in the same process. The bou
 
 ### 4.4 Workflow Mapping — How the Pipeline Maps to the 15-Step Clinical Review
 
-Latitude's PA workflow specification (Clinical_review_steps.pdf) defines a 15-step process that UM reviewers follow. Every step has a home in our pipeline. This mapping is explicit so reviewers reading this spec can see exactly where each step lives.
+The PA workflow specification (Clinical_review_steps.pdf) defines a 15-step process that UM reviewers follow. Every step has a home in our pipeline. This mapping is explicit so reviewers reading this spec can see exactly where each step lives.
 
 | # | Workflow Step | Pipeline Component |
 |---|---|---|
@@ -1069,7 +1069,7 @@ GET    /health                              Health check
 ## 7. Project Layout
 
 ```
-latitude-health-pa/
+pa-prototype/
 ├── README.md
 ├── pyproject.toml
 ├── docker-compose.yml

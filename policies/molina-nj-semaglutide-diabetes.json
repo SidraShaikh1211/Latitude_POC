@@ -304,7 +304,7 @@
   ],
 
   "metadata": {
-    "authored_by": "PA Prototype PA Prototype",
+    "authored_by": "PA Prototype",
     "authored_at": "2026-05-25",
     "review_status": "prototype-validated",
     "notes": "Models Molina NJ Clinical Policy NJ-RX-SEMA-DM-2024 (Semaglutide / Ozempic / Rybelsus for Type 2 Diabetes). Sibling to molina-nj-semaglutide-obesity — same payer/state/HCPCS, separated by ICD-10 indication. Selector relies on Claim.item[0].diagnosisSequence to route between the two."

@@ -1,6 +1,6 @@
 # Running the Evals
 
-5-level eval pyramid for the Latitude PA prototype. Tests every stage of the agent against synthetic cases that are **independent of the demo patients** (Smith / Taylor / Welsh).
+5-level eval pyramid for the PA prototype. Tests every stage of the agent against synthetic cases that are **independent of the demo patients** (Smith / Taylor / Welsh).
 
 ## Prereqs
 

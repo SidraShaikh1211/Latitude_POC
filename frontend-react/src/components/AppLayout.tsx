@@ -44,7 +44,7 @@ export function AppLayout() {
         <div className="container mx-auto px-6 py-3 flex items-center gap-6">
           <Link to="/" className="flex items-center gap-2 font-semibold">
             <Hospital className="h-5 w-5 text-primary" />
-            PA Prototype — PA
+            PA Prototype
           </Link>
           <nav className="flex items-center gap-1 ml-4">
             {navItems.map((it) => {
